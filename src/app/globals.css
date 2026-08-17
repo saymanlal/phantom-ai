@@ -1,0 +1,160 @@
+@import 'tailwindcss';
+
+:root {
+  --background: #0a0a0f;
+  --surface: #0f0f18;
+  --surface-2: #141420;
+  --surface-3: #1a1a28;
+  --border: rgba(255,255,255,0.06);
+  --border-active: rgba(255,255,255,0.12);
+  --text-primary: #f0f0f8;
+  --text-secondary: #8888aa;
+  --text-muted: #55556a;
+  --accent: #4f8ef7;
+  --accent-dim: rgba(79,142,247,0.15);
+  --accent-glow: rgba(79,142,247,0.08);
+  --success: #3ecf8e;
+  --warning: #f5a623;
+  --danger: #ef4444;
+  --mission-running: #4f8ef7;
+  --mission-complete: #3ecf8e;
+  --mission-failed: #ef4444;
+  --mission-queued: #f5a623;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--background);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle grain texture */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.4;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
+
+::selection { background: rgba(79,142,247,0.3); }
+
+.phantom-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.phantom-input {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  padding: 10px 14px;
+  font-size: 14px;
+  outline: none;
+  width: 100%;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.phantom-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.phantom-input::placeholder { color: var(--text-muted); }
+
+.phantom-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: none;
+  outline: none;
+  white-space: nowrap;
+}
+.phantom-btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+.phantom-btn-primary:hover { background: #6aa0f8; }
+.phantom-btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+.phantom-btn-ghost:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+  border-color: var(--border-active);
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.status-running { background: var(--mission-running); box-shadow: 0 0 6px var(--accent); animation: pulse 2s infinite; }
+.status-completed { background: var(--success); }
+.status-failed { background: var(--danger); }
+.status-queued { background: var(--warning); }
+.status-paused { background: var(--text-muted); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-in { animation: fadeIn 0.2s ease-out; }
+
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--surface-3);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.progress-bar {
+  height: 2px;
+  background: var(--surface-3);
+  border-radius: 1px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 1px;
+  transition: width 0.5s ease;
+}
+.progress-fill.complete { background: var(--success); }
+.progress-fill.failed { background: var(--danger); }
