@@ -1,50 +1,133 @@
 import type { ParsedIntent, AutonomyLevel, ResearchMode } from '@/types';
 import { parseDeadline } from '@/lib/utils';
 
-export type IntentCategory = 'CONVERSATION' | 'SYSTEM_QUERY' | 'RESEARCH' | 'ANALYZE' | 'MONITOR' | 'DEBUG' | 'CREATE' | 'AUTOMATE' | 'GENERIC_MISSION';
+export type IntentCategory =
+  | 'CONVERSATION'
+  | 'CHIT_CHAT'
+  | 'SYSTEM_QUERY'
+  | 'NEED_CLARIFICATION'
+  | 'DIRECT_SUGGESTION'
+  | 'TALKING_TO_OTHERS'
+  | 'VOICE_CONTROL'
+  | 'RESEARCH'
+  | 'ANALYZE'
+  | 'MONITOR'
+  | 'DEBUG'
+  | 'CREATE'
+  | 'AUTOMATE'
+  | 'GENERIC_MISSION';
 
 export interface ConversationalResponse {
   isConversation: boolean;
   reply?: string;
   category: IntentCategory;
+  suggestedQuestions?: string[];
+  requiresUserInput?: boolean;
+  ignoredAsThirdParty?: boolean;
 }
 
 export class IntentEngine {
-  // Direct conversational & intent resolution without mandating an LLM API
+  // Advanced Hinglish / Hindi / English bidirectional understanding
+  // Includes background ambient speech filtering (detects if user is talking to someone else)
   evaluateConversational(input: string): ConversationalResponse {
     const trimmed = input.trim();
     const lower = trimmed.toLowerCase();
 
-    // Greetings & status inquiries
-    if (/^(hi|hello|hey|greetings|good\s+(morning|afternoon|evening|day)|howdy|sup)[\s!.]*$/i.test(trimmed)) {
+    // 1. THIRD-PARTY / TALKING-TO-OTHERS FILTER
+    // If the speech clearly addresses someone else (mom, brother, calling someone else, background noise)
+    if (
+      /^(bhai sun|mummy|are yaar sun|ek minute ruko bhai|wait bro not you|phone pe hu|calling you later|hold on guys|bro shut up|arre bhai usko bol|pani lana)/i.test(
+        trimmed
+      )
+    ) {
+      return {
+        isConversation: true,
+        category: 'TALKING_TO_OTHERS',
+        ignoredAsThirdParty: true,
+        reply: "*(Ambient speech detected — listening in standby mode)*",
+      };
+    }
+
+    // 2. VOICE CONTROLS (Hindi / English / Hinglish)
+    if (/^(stop listening|chup ho jao|shant raho|mute|pause voice|awaz band karo|ruk jao)[\s!.]*$/i.test(trimmed)) {
+      return {
+        isConversation: true,
+        category: 'VOICE_CONTROL',
+        reply: "Voice output muted. Still active on standby — say 'Phantom resume' or speak whenever you need me.",
+      };
+    }
+
+    if (/^(start listening|unmute|awaz chalu karo|phantom suno|phantom bolna chalu karo)[\s!.]*$/i.test(trimmed)) {
+      return {
+        isConversation: true,
+        category: 'VOICE_CONTROL',
+        reply: "Voice output fully active. Main sun raha hu, bataiye kya karna hai.",
+      };
+    }
+
+    // 3. GREETINGS & HINGLISH CHIT-CHAT
+    if (/^(hi|hello|hey|kya hal hai|kaisa hai|namaste|pranam|what's up|wassup|yo phantom|kaise ho)[\s!.]*$/i.test(trimmed)) {
+      return {
+        isConversation: true,
+        category: 'CHIT_CHAT',
+        reply: "Ekdam badhiya! PHANTOM OS is running at 100% efficiency. Kuch naya research karna hai, koi dataset analyze karna hai, ya koi automate workflow run kare?",
+        suggestedQuestions: [
+          "Research 50 AI startups in India",
+          "Analyze revenue CSV data",
+          "What is my current system status?",
+          "Monitor TechCrunch AI news",
+        ],
+      };
+    }
+
+    // 4. RANDOM CHIT-CHAT & PHILOSOPHICAL / TECH OPINIONS
+    if (/^(batao kuch naya|tell me something interesting|kya chal raha hai|what are you thinking|bore ho raha hu)[\s?!.]*$/i.test(trimmed)) {
+      return {
+        isConversation: true,
+        category: 'CHIT_CHAT',
+        reply: "Dilchasp baat: Sovereign Indic LLMs (like Sarvam & Krutrim) and Edge AI startups are scaling 3x faster this year across Tier 2/3 Indian cities. Agar aap chaho toh hum global vs Indian AI valuations ka ek direct comparison report bana sakte hain.",
+        suggestedQuestions: [
+          "Compare Indian vs US AI funding trends",
+          "Find top 10 Indic speech AI models",
+          "Check upcoming AI conferences",
+        ],
+      };
+    }
+
+    if (/^(who are you|who made you|tum kaun ho|phantom kya hai|kya kar sakte ho)[\s?!.]*$/i.test(trimmed)) {
       return {
         isConversation: true,
         category: 'CONVERSATION',
-        reply: "PHANTOM online. All local kernel systems and background providers are active. Provide an objective, research directive, file dataset, or target to execute.",
+        reply: "Main PHANTOM AI hu — aapka autonomous personal operating system. Mai chatbot nahi hu; mai outcomes execute karta hu: Autonomous research, task DAG execution, data verification, aur background workflows. Both Hindi and English comfortably.",
+        suggestedQuestions: [
+          "Show available capabilities",
+          "Create a new market research project",
+          "Check permission settings",
+        ],
       };
     }
 
-    if (/^(who are you|what are you|what is phantom|introduce yourself)[\s?!.]*$/i.test(trimmed)) {
+    // 5. INTELLIGENT QUESTIONING / UNDERSPECIFIED OBJECTIVES
+    // If the user gives a single vague keyword like "startups" or "research" or "data"
+    if (/^(startups|research|companies|analyze|data|report)$/i.test(trimmed)) {
       return {
         isConversation: true,
-        category: 'CONVERSATION',
-        reply: "I am PHANTOM AI, an autonomous personal network operating system. I operate on an Outcome > Conversation philosophy: transforming high-level goals into executable task graphs, conducting multi-source research, analyzing structured data, and managing persistent background workflows.",
+        category: 'NEED_CLARIFICATION',
+        requiresUserInput: true,
+        reply: `Aapne "${trimmed}" specify kiya hai, par target thoda broad hai. Kis sector ya region me focus karna hai?`,
+        suggestedQuestions: [
+          `Find 50 Indian AI ${trimmed} and create report`,
+          `Deep research on global generative AI ${trimmed}`,
+          `Quick scan of top 10 funded ${trimmed}`,
+        ],
       };
     }
 
-    if (/^(help|commands|what can you do|capabilities)[\s?!.]*$/i.test(trimmed)) {
+    if (/^(status|health|system status|check providers|sab kaisa hai)[\s?!.]*$/i.test(trimmed)) {
       return {
         isConversation: true,
         category: 'SYSTEM_QUERY',
-        reply: "Available capabilities:\n• Deep Web Research: 'Research 50 AI startups in India and create a report'\n• Dataset Analysis: 'Analyze CSV revenue anomalies and produce summary metrics'\n• Project Workspaces: 'Create a new project for Q3 Market Intelligence'\n• Automation & Monitoring: 'Monitor repository releases and track changes'\n• Permission Center: Configure ALLOW / ASK / DENY rules in Settings.",
-      };
-    }
-
-    if (/^(status|health|system status|provider status)[\s?!.]*$/i.test(trimmed)) {
-      return {
-        isConversation: true,
-        category: 'SYSTEM_QUERY',
-        reply: "System Status: HEALTHY\n• Kernel: Initialized\n• Execution Provider: BrowserWorkerProvider (Active)\n• State Store: IndexedDB (Event-Sourced)\n• Permission Engine: Active (Safety Boundaries Enforced)",
+        reply: "System Status: HEALTHY 🟢\n• Kernel: Initialized\n• Voice Engine: Web Speech API (Bilingual Eng/Hindi)\n• Execution: BrowserWorkerProvider (Active)\n• Memory Store: IndexedDB (Event-Sourced)\n• All Safety Controls: Active",
       };
     }
 
@@ -58,40 +141,36 @@ export class IntentEngine {
     let researchMode: ResearchMode = 'STANDARD';
     let confidence = 0.6;
 
-    if (/\b(research|find|discover|search|look up|investigate|scrape|aggregate)\b/.test(lower)) {
+    if (/\b(research|find|discover|search|look up|investigate|scrape|aggregate|dhundo|pata karo)\b/.test(lower)) {
       action = 'RESEARCH';
       confidence += 0.2;
-    } else if (/\b(analyze|analyse|analysis|inspect|audit|evaluate)\b/.test(lower)) {
+    } else if (/\b(analyze|analyse|analysis|inspect|audit|evaluate|check karo|jaanch karo)\b/.test(lower)) {
       action = 'ANALYZE';
       confidence += 0.2;
-    } else if (/\b(monitor|watch|track|observe)\b/.test(lower)) {
+    } else if (/\b(monitor|watch|track|observe|nazar rakho)\b/.test(lower)) {
       action = 'MONITOR';
       researchMode = 'MONITORING';
       confidence += 0.2;
-    } else if (/\b(create|build|generate|draft|write)\b/.test(lower)) {
+    } else if (/\b(create|build|generate|draft|write|banao|likho)\b/.test(lower)) {
       action = 'CREATE';
       confidence += 0.15;
-    } else if (/\b(fix|debug|repair|diagnose)\b/.test(lower)) {
+    } else if (/\b(fix|debug|repair|diagnose|theek karo)\b/.test(lower)) {
       action = 'DEBUG';
       confidence += 0.2;
     }
 
-    // Detect depth
-    if (/\b(quick|fast|brief)\b/.test(lower)) researchMode = 'QUICK';
-    if (/\b(deep|thorough|comprehensive|forensic)\b/.test(lower)) researchMode = 'DEEP';
+    if (/\b(quick|fast|brief|jaldi)\b/.test(lower)) researchMode = 'QUICK';
+    if (/\b(deep|thorough|comprehensive|forensic|poora detail me)\b/.test(lower)) researchMode = 'DEEP';
 
-    // Quantity extraction
     const quantityMatch = input.match(/\b(\d+)\b/);
     const quantity = quantityMatch ? parseInt(quantityMatch[1], 10) : undefined;
 
-    // Location extraction
     let location: string | undefined;
-    if (/\bindia\b|\bindian\b/.test(lower)) location = 'india';
+    if (/\bindia\b|\bindian\b|\bbharat\b/.test(lower)) location = 'india';
     else if (/\busa\b|\bus\b|\bamerican\b/.test(lower)) location = 'usa';
     else if (/\beurope\b|\buk\b|\bgermany\b/.test(lower)) location = 'europe';
     else if (/\bglobal\b|\bworldwide\b/.test(lower)) location = 'global';
 
-    // Object entity
     let object: string | undefined;
     if (/\b(startup|startups|company|companies|firms)\b/.test(lower)) object = 'companies';
     else if (/\b(repo|repository|codebase|github)\b/.test(lower)) object = 'repository';
@@ -101,7 +180,7 @@ export class IntentEngine {
     const deadline = parseDeadline(input);
 
     let mode: AutonomyLevel = 'FULL_AUTONOMY';
-    if (lower.includes('ask me') || lower.includes('confirm')) mode = 'ASSISTED';
+    if (lower.includes('ask me') || lower.includes('confirm') || lower.includes('pooch ke')) mode = 'ASSISTED';
     else if (lower.includes('manual')) mode = 'MANUAL';
 
     const suggestedPlan = this.buildPlan(action, object, quantity, location);

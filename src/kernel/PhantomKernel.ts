@@ -17,6 +17,9 @@ export type KernelState = {
 export type ProcessCommandResult = {
   isConversation: boolean;
   directReply?: string;
+  suggestedQuestions?: string[];
+  requiresUserInput?: boolean;
+  ignoredAsThirdParty?: boolean;
   mission?: Mission;
 };
 
@@ -53,16 +56,19 @@ export class PhantomKernel {
     const targetProjectId = projectId ?? this.state.activeProjectId;
     if (!targetProjectId) throw new Error('No active project. Create a project first.');
 
-    // 1. Check if it is a direct greeting or conversational query
+    // 1. Check conversational, ambient third-party filters, and intelligent questions
     const conv = intentEngine.evaluateConversational(input);
     if (conv.isConversation && conv.reply) {
       return {
         isConversation: true,
         directReply: conv.reply,
+        suggestedQuestions: conv.suggestedQuestions,
+        requiresUserInput: conv.requiresUserInput,
+        ignoredAsThirdParty: conv.ignoredAsThirdParty,
       };
     }
 
-    // 2. Otherwise treat as a genuine operational mission
+    // 2. Otherwise execute genuine operational mission DAG
     const intent = intentEngine.parse(input);
     const mission = await missionEngine.createFromIntent(intent, targetProjectId);
     await projectEngine.addMission(targetProjectId, mission.id);
