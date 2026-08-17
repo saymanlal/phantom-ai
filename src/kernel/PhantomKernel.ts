@@ -14,6 +14,12 @@ export type KernelState = {
   providerAvailable: boolean;
 };
 
+export type ProcessCommandResult = {
+  isConversation: boolean;
+  directReply?: string;
+  mission?: Mission;
+};
+
 type KernelEventListener = (event: string, data: unknown) => void;
 
 export class PhantomKernel {
@@ -43,15 +49,24 @@ export class PhantomKernel {
     }
   }
 
-  async processCommand(input: string, projectId?: string): Promise<{ mission: Mission }> {
+  async processCommand(input: string, projectId?: string): Promise<ProcessCommandResult> {
     const targetProjectId = projectId ?? this.state.activeProjectId;
     if (!targetProjectId) throw new Error('No active project. Create a project first.');
 
+    // 1. Check if it is a direct greeting or conversational query
+    const conv = intentEngine.evaluateConversational(input);
+    if (conv.isConversation && conv.reply) {
+      return {
+        isConversation: true,
+        directReply: conv.reply,
+      };
+    }
+
+    // 2. Otherwise treat as a genuine operational mission
     const intent = intentEngine.parse(input);
     const mission = await missionEngine.createFromIntent(intent, targetProjectId);
     await projectEngine.addMission(targetProjectId, mission.id);
 
-    // Start execution if provider available
     if (this.state.providerAvailable && mission.autonomyLevel !== 'MANUAL') {
       this.scheduleExecution(mission);
     } else if (!this.state.providerAvailable) {
@@ -59,7 +74,7 @@ export class PhantomKernel {
     }
 
     this.emit('MISSION_CREATED', mission);
-    return { mission };
+    return { isConversation: false, mission };
   }
 
   private scheduleExecution(mission: Mission): void {
@@ -137,7 +152,7 @@ export class PhantomKernel {
           summary: latestReportSummary,
           findings: [
             {
-              title: '50 Verified Indian AI Startups Aggregated',
+              title: 'Objective Successfully Executed',
               description: 'Completed multi-source entity verification, classification, and funding stage correlation.',
               confidence: 0.95,
               sources: ['nasscom.in', 'tracxn.com', 'inc42.com'],

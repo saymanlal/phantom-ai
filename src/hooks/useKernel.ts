@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import type { Mission, Project, PhantomNotification } from '@/types';
+import type { ProcessCommandResult } from '@/kernel/PhantomKernel';
 
 type KernelHookState = {
   initialized: boolean;
@@ -79,7 +80,7 @@ export function useKernel() {
     };
   }, [refresh]);
 
-  const sendCommand = useCallback(async (input: string): Promise<{ mission: Mission }> => {
+  const sendCommand = useCallback(async (input: string): Promise<ProcessCommandResult> => {
     if (!kernel) throw new Error('Kernel not initialized');
     const result = await kernel.processCommand(input, state.activeProject?.id);
     await refresh(kernel);

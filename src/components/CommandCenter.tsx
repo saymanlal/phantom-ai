@@ -1,7 +1,8 @@
 'use client';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import type { Mission, Project, PhantomNotification } from '@/types';
 import type { ViewType } from './PhantomApp';
+import type { ProcessCommandResult } from '@/kernel/PhantomKernel';
 import { MissionCard } from './MissionCard';
 import { formatRelativeTime } from '@/lib/utils';
 
@@ -13,31 +14,34 @@ type Props = {
   notifications: PhantomNotification[];
   providerAvailable: boolean;
   systemStatus: 'READY' | 'INITIALIZING' | 'ERROR';
-  sendCommand: (input: string) => Promise<{ mission: Mission }>;
+  sendCommand: (input: string) => Promise<ProcessCommandResult>;
   onNavigate: (view: ViewType) => void;
 };
 
 export function CommandCenter({ initialized, activeProject, missions, notifications, providerAvailable, systemStatus, sendCommand, onNavigate }: Props) {
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [lastResult, setLastResult] = useState<{ mission: Mission } | null>(null);
+  const [directResponse, setDirectResponse] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const activeMissions = missions.filter(m => m.status === 'RUNNING' || m.status === 'QUEUED');
   const recentMissions = missions.slice(0, 4);
-  const unreadNotifications = notifications.filter(n => !n.read).slice(0, 3);
 
   const handleSubmit = async () => {
     const trimmed = input.trim();
     if (!trimmed || isProcessing) return;
     setError(null);
+    setDirectResponse(null);
     setIsProcessing(true);
     try {
       const result = await sendCommand(trimmed);
-      setLastResult(result);
       setInput('');
-      onNavigate('missions');
+      if (result.isConversation && result.directReply) {
+        setDirectResponse(result.directReply);
+      } else {
+        onNavigate('missions');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -73,7 +77,7 @@ export function CommandCenter({ initialized, activeProject, missions, notificati
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '32px 40px' }}>
       {/* Header */}
-      <div style={{ marginBottom: '40px' }}>
+      <div style={{ marginBottom: '32px' }}>
         <div style={{ fontSize: '11px', letterSpacing: '0.15em', color: 'var(--text-muted)', marginBottom: '8px' }}>
           {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase()}
         </div>
@@ -93,7 +97,7 @@ export function CommandCenter({ initialized, activeProject, missions, notificati
         border: '1px solid var(--border)',
         borderRadius: 'var(--radius-xl)',
         padding: '20px',
-        marginBottom: '32px',
+        marginBottom: '28px',
         transition: 'border-color 0.15s',
       }}>
         <textarea
@@ -102,7 +106,7 @@ export function CommandCenter({ initialized, activeProject, missions, notificati
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Describe an objective, research task, or mission..."
+          placeholder="Describe an objective, ask about system capabilities, or trigger a research mission..."
           rows={3}
           style={{
             width: '100%',
@@ -134,10 +138,30 @@ export function CommandCenter({ initialized, activeProject, missions, notificati
             disabled={isProcessing || !input.trim()}
             style={{ opacity: !input.trim() || isProcessing ? 0.4 : 1 }}
           >
-            {isProcessing ? 'Creating mission...' : 'Execute'}
+            {isProcessing ? 'Processing...' : 'Execute'}
           </button>
         </div>
       </div>
+
+      {/* Direct Conversational / Capability Reply Box */}
+      {directResponse && (
+        <div style={{
+          background: 'var(--surface-2)',
+          border: '1px solid var(--accent)',
+          borderRadius: 'var(--radius-lg)',
+          padding: '16px 20px',
+          marginBottom: '28px',
+          boxShadow: '0 0 16px rgba(79,142,247,0.1)',
+        }} className="animate-in">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+            <span style={{ fontSize: '12px', fontWeight: '600', color: 'var(--accent)' }}>PHANTOM</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Operator Response</span>
+          </div>
+          <div style={{ fontSize: '14px', color: 'var(--text-primary)', lineHeight: '1.6', whiteSpace: 'pre-wrap' }}>
+            {directResponse}
+          </div>
+        </div>
+      )}
 
       {/* Error */}
       {error && (
@@ -162,7 +186,9 @@ export function CommandCenter({ initialized, activeProject, missions, notificati
             ACTIVE MISSIONS
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {activeMissions.map(m => <MissionCard key={m.id} mission={m} compact />)}
+            {activeMissions.map(m => (
+              <MissionCard key={m.id} mission={m} compact onClick={() => onNavigate('missions')} />
+            ))}
           </div>
         </section>
       )}
@@ -175,13 +201,15 @@ export function CommandCenter({ initialized, activeProject, missions, notificati
             <button onClick={() => onNavigate('missions')} style={{ fontSize: '11px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer' }}>View all →</button>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {recentMissions.map(m => <MissionCard key={m.id} mission={m} compact />)}
+            {recentMissions.map(m => (
+              <MissionCard key={m.id} mission={m} compact onClick={() => onNavigate('missions')} />
+            ))}
           </div>
         </section>
       )}
 
       {/* Suggestions */}
-      {missions.length === 0 && (
+      {missions.length === 0 && !directResponse && (
         <section>
           <div style={{ fontSize: '11px', letterSpacing: '0.12em', color: 'var(--text-muted)', marginBottom: '12px' }}>EXAMPLE MISSIONS</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
