@@ -18,42 +18,90 @@ type Props = {
   onNavigate: (view: ViewType) => void;
 };
 
+interface DialogueTurn {
+  id: string;
+  sender: 'USER' | 'PHANTOM';
+  text: string;
+  timestamp: string;
+  suggestedQuestions?: string[];
+}
+
 export function CommandCenter({ initialized, activeProject, missions, notifications, providerAvailable, systemStatus, sendCommand, onNavigate }: Props) {
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [directResponse, setDirectResponse] = useState<{ reply: string; questions?: string[] } | null>(null);
+  const [dialogueHistory, setDialogueHistory] = useState<DialogueTurn[]>([
+    {
+      id: 'init_1',
+      sender: 'PHANTOM',
+      text: "PHANTOM Autonomous Kernel initialized. Always-on bilingual voice listener active. Say 'Phantom suno' or speak any operational directive directly.",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      suggestedQuestions: [
+        "Research 50 AI startups in India and create report",
+        "Analyze CSV revenue data",
+        "What are the top Indic AI models?",
+        "Kaise ho Phantom? Aaj kya update hai?",
+      ],
+    },
+  ]);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
 
   const activeMissions = missions.filter(m => m.status === 'RUNNING' || m.status === 'QUEUED');
   const recentMissions = missions.slice(0, 4);
 
-  // Voice Engine setup
-  const voice = useVoiceInterface(async (spokenCommand) => {
-    if (!spokenCommand.trim() || isProcessing) return;
-    executeCommand(spokenCommand);
+  // Autonomous continuous voice hook
+  const voice = useVoiceInterface(async (spokenText) => {
+    if (!spokenText.trim() || isProcessing) return;
+    executeCommand(spokenText);
   });
+
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [dialogueHistory]);
 
   const executeCommand = async (cmdText: string) => {
     const trimmed = cmdText.trim();
     if (!trimmed || isProcessing) return;
     setError(null);
-    setDirectResponse(null);
     setIsProcessing(true);
+
+    const userTurn: DialogueTurn = {
+      id: `user_${Date.now()}`,
+      sender: 'USER',
+      text: trimmed,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    setDialogueHistory(prev => [...prev, userTurn]);
+    setInput('');
 
     try {
       const result = await sendCommand(trimmed);
-      setInput('');
 
       if (result.isConversation && result.directReply) {
-        setDirectResponse({
-          reply: result.directReply,
-          questions: result.suggestedQuestions,
-        });
+        const phantomTurn: DialogueTurn = {
+          id: `ph_${Date.now()}`,
+          sender: 'PHANTOM',
+          text: result.directReply,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          suggestedQuestions: result.suggestedQuestions,
+        };
+        setDialogueHistory(prev => [...prev, phantomTurn]);
 
-        // Proactive voice reply
+        // Speak reply via TTS
         voice.speak(result.directReply);
       } else {
+        const missionTurn: DialogueTurn = {
+          id: `ph_m_${Date.now()}`,
+          sender: 'PHANTOM',
+          text: `Mission initialized: "${trimmed}". Executing task DAG, multi-source verification, and synthesis.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          suggestedQuestions: ["View task graph in Missions", "Export report"],
+        };
+        setDialogueHistory(prev => [...prev, missionTurn]);
         voice.speak("Mission created. Executing autonomous workflow now.");
         onNavigate('missions');
       }
@@ -75,18 +123,11 @@ export function CommandCenter({ initialized, activeProject, missions, notificati
     }
   };
 
-  const EXAMPLE_COMMANDS = [
-    'Research 50 Indian AI startups and create an executive report',
-    'Kaise ho Phantom? Aaj kya update hai?',
-    'Analyze CSV dataset for revenue anomalies',
-    'Tell me something interesting about Indic LLMs',
-  ];
-
   if (!initialized) {
     return (
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: '13px', marginBottom: '8px' }}>Initializing PHANTOM...</div>
+          <div style={{ fontSize: '13px', marginBottom: '8px' }}>Initializing Multidimensional OS Kernel...</div>
           <div className="status-dot status-queued" style={{ margin: '0 auto' }} />
         </div>
       </div>
@@ -94,263 +135,302 @@ export function CommandCenter({ initialized, activeProject, missions, notificati
   }
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '32px 40px' }}>
-      {/* Header & Voice Toggle Bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '28px' }}>
-        <div>
-          <div style={{ fontSize: '11px', letterSpacing: '0.15em', color: 'var(--text-muted)', marginBottom: '6px' }}>
-            {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase()}
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {/* Top Header Bar */}
+      <header style={{
+        padding: '16px 32px',
+        borderBottom: '1px solid var(--border)',
+        background: 'rgba(15,15,24,0.7)',
+        backdropFilter: 'blur(12px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        zIndex: 10,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{
+            width: '32px', height: '32px',
+            background: 'linear-gradient(135deg, #4f8ef7 0%, #3ecf8e 100%)',
+            borderRadius: '8px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontWeight: '700', fontSize: '14px', color: '#fff',
+            boxShadow: '0 0 16px rgba(79,142,247,0.3)',
+          }}>
+            Ψ
           </div>
-          <h1 style={{ fontSize: '28px', fontWeight: '300', color: 'var(--text-primary)', letterSpacing: '-0.5px' }}>
-            What needs to happen?
-          </h1>
-          {activeProject && (
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-              Workspace: <span style={{ color: 'var(--text-secondary)' }}>{activeProject.name}</span>
+          <div>
+            <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-primary)', letterSpacing: '0.05em' }}>
+              PHANTOM OS
             </div>
-          )}
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+              Multidimensional Neural Surface • {activeProject ? activeProject.name : 'Personal Workspace'}
+            </div>
+          </div>
         </div>
 
-        {/* Voice Control Indicator */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--surface)', padding: '6px 12px', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}>
-          <button
+        {/* Audio / Voice State Indicator */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div
             onClick={voice.toggleListening}
-            title={voice.isListening ? "Voice Active (Click to mute)" : "Voice Muted (Click to activate)"}
             style={{
-              background: voice.isListening ? 'rgba(62,207,142,0.15)' : 'var(--surface-2)',
-              border: `1px solid ${voice.isListening ? 'var(--success)' : 'var(--border)'}`,
-              color: voice.isListening ? 'var(--success)' : 'var(--text-muted)',
-              borderRadius: '999px',
-              padding: '4px 10px',
-              fontSize: '12px',
-              fontWeight: '500',
-              cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px',
+              gap: '8px',
+              background: voice.isListening ? 'rgba(62,207,142,0.1)' : 'var(--surface-2)',
+              border: `1px solid ${voice.isListening ? 'rgba(62,207,142,0.3)' : 'var(--border)'}`,
+              borderRadius: '999px',
+              padding: '6px 14px',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
             }}
           >
-            <span style={{ fontSize: '12px' }}>{voice.isListening ? '🎙️ Listening' : '🔇 Mic Off'}</span>
-            {voice.isSpeaking && <span style={{ color: 'var(--accent)', fontSize: '10px' }}>• Speaking</span>}
-          </button>
-          
+            <span style={{ fontSize: '12px' }}>{voice.isListening ? '🎙️ Always-On Mic' : '🔇 Mic Muted'}</span>
+            {voice.isListening && (
+              <span style={{
+                width: '6px', height: '6px', borderRadius: '50%',
+                background: 'var(--success)',
+                boxShadow: '0 0 8px var(--success)',
+                animation: 'pulse 1.5s infinite',
+              }} />
+            )}
+          </div>
+
           <select
             value={voice.language}
             onChange={(e) => voice.setLanguage(e.target.value as any)}
             style={{
-              background: 'transparent',
-              border: 'none',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius)',
               color: 'var(--text-secondary)',
               fontSize: '11px',
-              cursor: 'pointer',
+              padding: '6px 10px',
               outline: 'none',
+              cursor: 'pointer',
             }}
           >
-            <option value="en-IN" style={{ background: '#111' }}>English (India)</option>
-            <option value="hi-IN" style={{ background: '#111' }}>Hindi / Hinglish</option>
-            <option value="en-US" style={{ background: '#111' }}>English (US)</option>
+            <option value="en-IN">English (India)</option>
+            <option value="hi-IN">Hindi / Hinglish</option>
+            <option value="en-US">English (US)</option>
           </select>
         </div>
-      </div>
+      </header>
 
-      {/* Real-time Voice Live Transcript Bubble */}
-      {voice.transcript && (
-        <div style={{
-          background: 'rgba(79,142,247,0.08)',
-          border: '1px solid rgba(79,142,247,0.2)',
-          borderRadius: 'var(--radius)',
-          padding: '8px 14px',
-          marginBottom: '16px',
-          fontSize: '12px',
-          color: 'var(--accent)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-        }}>
-          <span className="status-dot status-running" />
-          <span>Heard: "{voice.transcript}"</span>
-        </div>
-      )}
-
-      {/* Main Command Input */}
-      <div style={{
-        background: 'var(--surface)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-xl)',
-        padding: '20px',
-        marginBottom: '24px',
-        transition: 'border-color 0.15s',
-      }}>
-        <textarea
-          ref={textareaRef}
-          id="phantom-command-input"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Speak or type a command in English, Hindi, or Hinglish (e.g. '50 Indian AI startups dhundo aur report banao')..."
-          rows={3}
-          style={{
-            width: '100%',
-            background: 'transparent',
-            border: 'none',
-            outline: 'none',
-            color: 'var(--text-primary)',
-            fontSize: '15px',
-            lineHeight: '1.6',
-            resize: 'none',
-            fontFamily: 'inherit',
-          }}
-        />
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', gap: '6px' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              ⌘↵ to execute · Voice in-between commands supported
-            </span>
-          </div>
-          <button
-            id="phantom-execute-btn"
-            className="phantom-btn phantom-btn-primary"
-            onClick={handleSubmit}
-            disabled={isProcessing || !input.trim()}
-            style={{ opacity: !input.trim() || isProcessing ? 0.4 : 1 }}
-          >
-            {isProcessing ? 'Processing...' : 'Execute'}
-          </button>
-        </div>
-      </div>
-
-      {/* Direct Conversational & Questioning Container */}
-      {directResponse && (
-        <div style={{
-          background: 'var(--surface-2)',
-          border: '1px solid var(--accent)',
-          borderRadius: 'var(--radius-lg)',
-          padding: '18px 22px',
-          marginBottom: '28px',
-          boxShadow: '0 0 20px rgba(79,142,247,0.12)',
-        }} className="animate-in">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '12px', fontWeight: '600', color: 'var(--accent)' }}>PHANTOM OPERATOR</span>
-              <span style={{ fontSize: '10px', color: 'var(--success)', background: 'rgba(62,207,142,0.1)', padding: '1px 6px', borderRadius: '999px' }}>Active Response</span>
-            </div>
-            {voice.isSpeaking && (
-              <button
-                onClick={() => { if (typeof window !== 'undefined') window.speechSynthesis.cancel(); }}
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '11px', cursor: 'pointer' }}
-              >
-                ■ Stop audio
-              </button>
-            )}
-          </div>
-          <div style={{ fontSize: '14px', color: 'var(--text-primary)', lineHeight: '1.6', whiteSpace: 'pre-wrap', marginBottom: directResponse.questions?.length ? '14px' : '0' }}>
-            {directResponse.reply}
-          </div>
-
-          {/* Proactive Suggested Follow-ups / Questions */}
-          {directResponse.questions && directResponse.questions.length > 0 && (
-            <div>
-              <div style={{ fontSize: '11px', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '8px' }}>
-                SUGGESTED NEXT DIRECTIVES
+      {/* Main Multidimensional Workspace Body */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        {/* LEFT / CENTER: Neural Interactive Dialogue Stream */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', borderRight: '1px solid var(--border)' }}>
+          {/* Real-time Voice Live Transcript Banner */}
+          {voice.transcript && (
+            <div style={{
+              background: 'rgba(79,142,247,0.12)',
+              borderBottom: '1px solid rgba(79,142,247,0.3)',
+              padding: '8px 24px',
+              fontSize: '12px',
+              color: 'var(--accent)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span className="status-dot status-running" />
+                <span>Heard: "{voice.transcript}"</span>
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                {directResponse.questions.map((q, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => executeCommand(q)}
-                    style={{
-                      background: 'var(--surface)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius)',
-                      padding: '6px 12px',
-                      color: 'var(--accent)',
-                      fontSize: '12px',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      transition: 'all 0.12s',
-                    }}
-                  >
-                    → {q}
-                  </button>
+              <span style={{ fontSize: '10px', opacity: 0.8 }}>Pausing sends command automatically...</span>
+            </div>
+          )}
+
+          {/* Dialogue turns stream */}
+          <div
+            ref={chatScrollRef}
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              padding: '24px 32px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '18px',
+            }}
+          >
+            {dialogueHistory.map(turn => (
+              <div
+                key={turn.id}
+                style={{
+                  alignSelf: turn.sender === 'USER' ? 'flex-end' : 'flex-start',
+                  maxWidth: '82%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '4px',
+                }}
+                className="animate-in"
+              >
+                <div style={{
+                  fontSize: '10px',
+                  color: 'var(--text-muted)',
+                  alignSelf: turn.sender === 'USER' ? 'flex-end' : 'flex-start',
+                  display: 'flex',
+                  gap: '6px',
+                }}>
+                  <span>{turn.sender === 'USER' ? 'YOU' : 'PHANTOM OPERATOR'}</span>
+                  <span>•</span>
+                  <span>{turn.timestamp}</span>
+                </div>
+
+                <div style={{
+                  background: turn.sender === 'USER'
+                    ? 'linear-gradient(135deg, rgba(79,142,247,0.2) 0%, rgba(79,142,247,0.1) 100%)'
+                    : 'var(--surface-2)',
+                  border: `1px solid ${turn.sender === 'USER' ? 'rgba(79,142,247,0.4)' : 'var(--border)'}`,
+                  borderRadius: 'var(--radius-lg)',
+                  padding: '14px 18px',
+                  fontSize: '14px',
+                  lineHeight: '1.6',
+                  color: 'var(--text-primary)',
+                  boxShadow: turn.sender === 'PHANTOM' ? '0 4px 20px rgba(0,0,0,0.2)' : 'none',
+                  whiteSpace: 'pre-wrap',
+                }}>
+                  {turn.text}
+                </div>
+
+                {/* Suggested Questions / Next Directives */}
+                {turn.suggestedQuestions && turn.suggestedQuestions.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px' }}>
+                    {turn.suggestedQuestions.map((q, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => executeCommand(q)}
+                        style={{
+                          background: 'var(--surface)',
+                          border: '1px solid var(--border)',
+                          borderRadius: '999px',
+                          padding: '4px 12px',
+                          color: 'var(--accent)',
+                          fontSize: '11px',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        → {q}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Bottom Floating Command Bar */}
+          <div style={{
+            padding: '16px 24px',
+            borderTop: '1px solid var(--border)',
+            background: 'var(--surface)',
+          }}>
+            <div style={{
+              background: 'var(--surface-2)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-lg)',
+              padding: '10px 14px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+            }}>
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Speak in Hindi/English, ask a question, or command a research mission..."
+                rows={1}
+                style={{
+                  flex: 1,
+                  background: 'transparent',
+                  border: 'none',
+                  outline: 'none',
+                  color: 'var(--text-primary)',
+                  fontSize: '14px',
+                  resize: 'none',
+                  fontFamily: 'inherit',
+                  lineHeight: '1.4',
+                }}
+              />
+              <button
+                onClick={handleSubmit}
+                disabled={isProcessing || !input.trim()}
+                className="phantom-btn phantom-btn-primary"
+                style={{ padding: '6px 14px', fontSize: '12px', opacity: isProcessing || !input.trim() ? 0.4 : 1 }}
+              >
+                {isProcessing ? 'Processing...' : 'Execute'}
+              </button>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px', fontSize: '10px', color: 'var(--text-muted)' }}>
+              <span>Say "Phantom stop" or "Phantom wake up" anytime to toggle voice</span>
+              <span>⌘↵ to send</span>
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT: Multidimensional Telemetry & Active Missions Sidebar */}
+        <div style={{ width: '320px', background: 'var(--surface)', padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          {/* Mission Health Metrics */}
+          <div>
+            <div style={{ fontSize: '11px', letterSpacing: '0.12em', color: 'var(--text-muted)', marginBottom: '10px', fontWeight: '600' }}>
+              OPERATIONAL METRICS
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <div style={{ background: 'var(--surface-2)', padding: '10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Kernel State</div>
+                <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--success)' }}>ONLINE 🟢</div>
+              </div>
+              <div style={{ background: 'var(--surface-2)', padding: '10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Cloud Sync</div>
+                <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--accent)' }}>ACTIVE 🌐</div>
+              </div>
+              <div style={{ background: 'var(--surface-2)', padding: '10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Voice Engine</div>
+                <div style={{ fontSize: '13px', fontWeight: '600', color: voice.isListening ? 'var(--success)' : 'var(--text-muted)' }}>
+                  {voice.isListening ? 'LISTENING 🎙️' : 'MUTED 🔇'}
+                </div>
+              </div>
+              <div style={{ background: 'var(--surface-2)', padding: '10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Active Missions</div>
+                <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-primary)' }}>{activeMissions.length}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Active Missions */}
+          {activeMissions.length > 0 && (
+            <div>
+              <div style={{ fontSize: '11px', letterSpacing: '0.12em', color: 'var(--text-muted)', marginBottom: '8px', fontWeight: '600' }}>
+                ACTIVE EXECUTION
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {activeMissions.map(m => (
+                  <MissionCard key={m.id} mission={m} compact onClick={() => onNavigate('missions')} />
                 ))}
               </div>
             </div>
           )}
-        </div>
-      )}
 
-      {/* Error */}
-      {error && (
-        <div style={{
-          background: 'rgba(239,68,68,0.08)',
-          border: '1px solid rgba(239,68,68,0.2)',
-          borderRadius: 'var(--radius)',
-          padding: '12px 16px',
-          marginBottom: '24px',
-          color: 'var(--danger)',
-          fontSize: '13px',
-        }}>
-          <strong>Execution error:</strong> {error}
-        </div>
-      )}
-
-      {/* Active Missions */}
-      {activeMissions.length > 0 && (
-        <section style={{ marginBottom: '32px' }}>
-          <div style={{ fontSize: '11px', letterSpacing: '0.12em', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span className="status-dot status-running" />
-            ACTIVE MISSIONS
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {activeMissions.map(m => (
-              <MissionCard key={m.id} mission={m} compact onClick={() => onNavigate('missions')} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* Recent Missions */}
-      {recentMissions.length > 0 && (
-        <section style={{ marginBottom: '32px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-            <div style={{ fontSize: '11px', letterSpacing: '0.12em', color: 'var(--text-muted)' }}>RECENT MISSIONS</div>
-            <button onClick={() => onNavigate('missions')} style={{ fontSize: '11px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer' }}>View all →</button>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {recentMissions.map(m => (
-              <MissionCard key={m.id} mission={m} compact onClick={() => onNavigate('missions')} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* Suggestions */}
-      {missions.length === 0 && !directResponse && (
-        <section>
-          <div style={{ fontSize: '11px', letterSpacing: '0.12em', color: 'var(--text-muted)', marginBottom: '12px' }}>EXAMPLE MISSIONS</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {EXAMPLE_COMMANDS.map((cmd, i) => (
-              <button
-                key={i}
-                onClick={() => setInput(cmd)}
-                style={{
-                  textAlign: 'left',
-                  background: 'var(--surface)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius)',
-                  padding: '10px 14px',
-                  color: 'var(--text-secondary)',
-                  fontSize: '13px',
-                  cursor: 'pointer',
-                  transition: 'all 0.12s',
-                }}
-              >
-                {cmd}
+          {/* Recent Missions */}
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <div style={{ fontSize: '11px', letterSpacing: '0.12em', color: 'var(--text-muted)', fontWeight: '600' }}>
+                RECENT MISSIONS
+              </div>
+              <button onClick={() => onNavigate('missions')} style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '11px', cursor: 'pointer' }}>
+                View all →
               </button>
-            ))}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {recentMissions.map(m => (
+                <MissionCard key={m.id} mission={m} compact onClick={() => onNavigate('missions')} />
+              ))}
+            </div>
           </div>
-        </section>
-      )}
+        </div>
+      </div>
     </div>
   );
 }

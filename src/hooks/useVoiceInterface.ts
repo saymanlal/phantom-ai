@@ -1,7 +1,6 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-// Web Speech API interface declarations for TypeScript
 interface SpeechRecognitionEvent extends Event {
   results: SpeechRecognitionResultList;
 }
@@ -29,151 +28,157 @@ declare global {
   }
 }
 
-export interface VoiceState {
-  isListening: boolean;
-  isSpeaking: boolean;
-  isMuted: boolean;
-  supported: boolean;
-  transcript: string;
-  language: 'hi-IN' | 'en-IN' | 'en-US';
-}
-
 export function useVoiceInterface(onCommandDetected?: (command: string) => void) {
-  const [isListening, setIsListening] = useState(false);
+  const [isListening, setIsListening] = useState(true); // Default always-on
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [supported, setSupported] = useState(false);
   const [language, setLanguage] = useState<'hi-IN' | 'en-IN' | 'en-US'>('en-IN');
+  const [audioLevel, setAudioLevel] = useState(0);
 
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
-  const isMutedRef = useRef(isMuted);
+  const isMutedRef = useRef(false);
   const onCommandRef = useRef(onCommandDetected);
-
-  useEffect(() => {
-    isMutedRef.current = isMuted;
-  }, [isMuted]);
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSpokenTextRef = useRef('');
 
   useEffect(() => {
     onCommandRef.current = onCommandDetected;
   }, [onCommandDetected]);
 
-  // Initialize Speech Recognition
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
 
+  // Self-healing continuous listener
+  const startRecognitionEngine = useCallback(() => {
+    if (typeof window === 'undefined') return;
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      setSupported(true);
+    if (!SpeechRecognition) return;
+
+    try {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch {}
+      }
+
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = language;
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
-        let finalTranscript = '';
+        let interim = '';
+        let final = '';
+
         for (let i = 0; i < event.results.length; i++) {
-          const result = event.results[i];
-          if (result && result[0]) {
-            if (result.isFinal) {
-              finalTranscript += result[0].transcript;
+          const res = event.results[i];
+          if (res && res[0]) {
+            if (res.isFinal) {
+              final += res[0].transcript + ' ';
+            } else {
+              interim += res[0].transcript;
             }
           }
         }
 
-        const currentText = event.results[event.results.length - 1]?.[0]?.transcript || '';
-        setTranscript(currentText);
+        const heardText = (final || interim).trim();
+        if (heardText) {
+          setTranscript(heardText);
+          setAudioLevel(Math.min(100, heardText.length * 6));
 
-        // Check if there is a complete sentence/utterance
-        if (finalTranscript.trim() && !isMutedRef.current) {
-          const cleanCmd = finalTranscript.trim();
-          setTranscript('');
-          
-          // Allow in-between command execution by stopping active speech if speaking
-          if (window.speechSynthesis?.speaking) {
-            window.speechSynthesis.cancel();
-            setIsSpeaking(false);
+          // 1. VOICE WAKE-WORDS & VOICE SHUTDOWN DETECTOR
+          if (/\b(phantom stop|chup ho jao|mute ho jao|stop listening|shant raho|mute voice|awaz band)\b/i.test(heardText)) {
+            setIsMuted(true);
+            isMutedRef.current = true;
+            window.speechSynthesis?.cancel();
+            speak("Voice muted. Say 'Phantom wake up' or 'Phantom suno' anytime to activate me.");
+            setTranscript('');
+            return;
           }
 
-          onCommandRef.current?.(cleanCmd);
+          if (/\b(phantom wake up|phantom suno|start listening|unmute|phantom bolo|activate)\b/i.test(heardText)) {
+            setIsMuted(false);
+            isMutedRef.current = false;
+            speak("Voice engine fully active. Main sun raha hu.");
+            setTranscript('');
+            return;
+          }
+
+          // If currently muted, ignore everything else
+          if (isMutedRef.current) return;
+
+          // 2. AMBIENT BACKGROUND SPEECH FILTER
+          if (/^(bhai sun|mummy|are yaar|ek minute ruko|wait guys|phone pe hu|calling you later|hold on|bro shut up)/i.test(heardText)) {
+            return; // Ignore ambient noise
+          }
+
+          // Debounced speech dispatch: Wait 900ms after user pauses speaking
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = setTimeout(() => {
+            if (heardText && heardText !== lastSpokenTextRef.current && !isMutedRef.current) {
+              lastSpokenTextRef.current = heardText;
+              setTranscript('');
+              setAudioLevel(0);
+
+              // Cancel active TTS output for in-between interruption
+              if (window.speechSynthesis?.speaking) {
+                window.speechSynthesis.cancel();
+                setIsSpeaking(false);
+              }
+
+              onCommandRef.current?.(heardText);
+            }
+          }, 900);
         }
       };
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-        // Auto-restart on benign network / no-speech timeouts
         if (event.error !== 'aborted' && !isMutedRef.current) {
-          try {
-            recognition.stop();
-          } catch {}
+          setTimeout(() => {
+            try { recognition.start(); } catch {}
+          }, 300);
         }
       };
 
       recognition.onend = () => {
-        // Persistent always-on listener (unless explicitly muted)
-        if (!isMutedRef.current && recognitionRef.current) {
-          try {
-            recognition.start();
-            setIsListening(true);
-          } catch {}
-        } else {
-          setIsListening(false);
+        // ALWAYS RESTART automatically for continuous non-glitchy listening
+        if (!isMutedRef.current) {
+          setTimeout(() => {
+            try { recognition.start(); } catch {}
+          }, 200);
         }
       };
 
+      recognition.start();
       recognitionRef.current = recognition;
-    }
+      setIsListening(true);
+      setSupported(true);
+    } catch {}
   }, [language]);
 
-  const startListening = useCallback(() => {
-    setIsMuted(false);
-    isMutedRef.current = false;
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.start();
-        setIsListening(true);
-      } catch {}
-    }
-  }, []);
+  useEffect(() => {
+    startRecognitionEngine();
+    return () => {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch {}
+      }
+    };
+  }, [startRecognitionEngine]);
 
-  const stopListening = useCallback(() => {
-    setIsMuted(true);
-    isMutedRef.current = true;
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch {}
-    }
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
-    setIsListening(false);
-    setIsSpeaking(false);
-  }, []);
-
-  const toggleListening = useCallback(() => {
-    if (isListening) {
-      stopListening();
-    } else {
-      startListening();
-    }
-  }, [isListening, startListening, stopListening]);
-
-  // Text-To-Speech with Hindi & English voice selection
   const speak = useCallback((text: string) => {
     if (isMutedRef.current || typeof window === 'undefined' || !window.speechSynthesis) return;
 
-    window.speechSynthesis.cancel(); // Interrupt any previous speech
+    window.speechSynthesis.cancel();
     setIsSpeaking(true);
 
     const utterance = new SpeechSynthesisUtterance(text);
-    
-    // Choose appropriate pitch and rate for professional operator feel
-    utterance.rate = 1.05;
+    utterance.rate = 1.02;
     utterance.pitch = 1.0;
 
     const voices = window.speechSynthesis.getVoices();
     const hindiVoice = voices.find(v => v.lang.includes('hi') || v.name.toLowerCase().includes('india') || v.name.toLowerCase().includes('hindi'));
-    const englishVoice = voices.find(v => v.lang.includes('en-IN') || v.lang.includes('en-US'));
+    const englishVoice = voices.find(v => v.lang.includes('en-IN') || v.lang.includes('en-GB') || v.lang.includes('en-US'));
 
     if (/[\u0900-\u097F]/.test(text) && hindiVoice) {
       utterance.voice = hindiVoice;
@@ -181,27 +186,35 @@ export function useVoiceInterface(onCommandDetected?: (command: string) => void)
       utterance.voice = englishVoice;
     }
 
-    utterance.onend = () => {
-      setIsSpeaking(false);
-    };
-
-    utterance.onerror = () => {
-      setIsSpeaking(false);
-    };
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
 
     window.speechSynthesis.speak(utterance);
   }, []);
 
+  const toggleListening = () => {
+    if (isMuted) {
+      setIsMuted(false);
+      isMutedRef.current = false;
+      startRecognitionEngine();
+      speak("Voice unmuted. I am listening.");
+    } else {
+      setIsMuted(true);
+      isMutedRef.current = true;
+      window.speechSynthesis?.cancel();
+      setIsSpeaking(false);
+    }
+  };
+
   return {
-    isListening,
+    isListening: !isMuted,
     isSpeaking,
     isMuted,
     supported,
     transcript,
+    audioLevel,
     language,
     setLanguage,
-    startListening,
-    stopListening,
     toggleListening,
     speak,
   };
