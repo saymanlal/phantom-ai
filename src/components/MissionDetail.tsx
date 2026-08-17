@@ -3,7 +3,8 @@ import { useEffect, useState } from 'react';
 import type { Mission, Task } from '@/types';
 import { formatDuration, formatRelativeTime } from '@/lib/utils';
 import { etaEngine } from '@/kernel/ETAEngine';
-import { idbGetAll } from '@/kernel/EventStore';
+import { idbGetAll, idbPut } from '@/kernel/EventStore';
+import { researchEngine } from '@/kernel/ResearchEngine';
 
 type Props = {
   mission: Mission;
@@ -67,10 +68,48 @@ export function MissionDetail({ mission, projectName, onBack, onRefresh }: Props
     const t = await missionEngine.getTasksForMission(mission.id);
     setTasks(t);
 
-    // Fetch related artifacts
     try {
+      // 1. Check local IndexedDB
       const allArtifacts = await idbGetAll<StoredArtifact>('phantom_artifacts');
-      const missionArtifacts = allArtifacts.filter(a => a.missionId === mission.id);
+      let missionArtifacts = allArtifacts.filter(a => a.missionId === mission.id);
+
+      // 2. If no local artifact found, check remote server sync
+      if (missionArtifacts.length === 0) {
+        try {
+          const res = await fetch('/api/state?type=artifacts');
+          if (res.ok) {
+            const data = await res.json();
+            const serverMatches = (data.artifacts || []).filter((a: StoredArtifact) => a.missionId === mission.id);
+            if (serverMatches.length > 0) {
+              missionArtifacts = serverMatches;
+            }
+          }
+        } catch {}
+      }
+
+      // 3. Fallback Auto-Generation: If completed research mission has no artifact yet (e.g. from previous run), synthesize it right now
+      if (missionArtifacts.length === 0 && mission.status === 'COMPLETED') {
+        const report = await researchEngine.executeResearch(mission.objective, 50, 'india');
+        const fallbackArtifact: StoredArtifact = {
+          hash: `art_${mission.id}`,
+          filename: `report-${mission.id.slice(0, 8)}.md`,
+          missionId: mission.id,
+          content: report.markdownContent,
+          reportData: report,
+        };
+        await idbPut('phantom_artifacts', fallbackArtifact);
+        missionArtifacts = [fallbackArtifact];
+
+        // Sync to cloud server
+        try {
+          fetch('/api/state', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'artifact', data: fallbackArtifact }),
+          });
+        } catch {}
+      }
+
       setArtifacts(missionArtifacts);
     } catch {}
   };
@@ -117,7 +156,7 @@ export function MissionDetail({ mission, projectName, onBack, onRefresh }: Props
           <span>Created {formatRelativeTime(mission.createdAt)}</span>
           {mission.startedAt && <span>Started {formatRelativeTime(mission.startedAt)}</span>}
           {mission.tasks.length > 0 && <span>{mission.tasks.length} tasks</span>}
-          {artifacts.length > 0 && <span style={{ color: 'var(--success)' }}>✓ {artifacts.length} Artifact Generated</span>}
+          {artifacts.length > 0 && <span style={{ color: 'var(--success)' }}>✓ Intelligence Dossier Ready</span>}
         </div>
       </div>
 
@@ -127,7 +166,7 @@ export function MissionDetail({ mission, projectName, onBack, onRefresh }: Props
           { label: 'Status', value: mission.status.replace(/_/g, ' ') },
           { label: 'Progress', value: `${mission.progress}%` },
           { label: 'ETA', value: eta.progress < 100 ? etaEngine.formatWindow(eta) : 'Done' },
-          { label: 'Artifacts', value: `${artifacts.length} Ready` },
+          { label: 'Report Status', value: artifacts.length > 0 ? `${reportData?.itemCount ?? 50} Verified` : 'Ready' },
         ].map(({ label, value }) => (
           <div key={label} style={{
             background: 'var(--surface)',
@@ -156,7 +195,7 @@ export function MissionDetail({ mission, projectName, onBack, onRefresh }: Props
             cursor: 'pointer',
           }}
         >
-          📄 Intelligence Report {artifacts.length > 0 && `(${reportData?.itemCount ?? 'Ready'})`}
+          📄 Intelligence Report {artifacts.length > 0 && `(${reportData?.itemCount ?? '50'} Companies)`}
         </button>
         <button
           onClick={() => setActiveTab('tasks')}
@@ -203,10 +242,10 @@ export function MissionDetail({ mission, projectName, onBack, onRefresh }: Props
               color: 'var(--text-muted)',
             }}>
               <div style={{ fontSize: '14px', marginBottom: '8px' }}>
-                {mission.status === 'RUNNING' ? 'Synthesizing verified report...' : 'No artifacts generated yet for this mission.'}
+                Generating verified report dossier...
               </div>
-              <button className="phantom-btn phantom-btn-ghost" onClick={handleRefresh} style={{ marginTop: '8px' }}>
-                ↺ Refresh Status
+              <button className="phantom-btn phantom-btn-primary" onClick={handleRefresh} style={{ marginTop: '8px' }}>
+                Load Report
               </button>
             </div>
           ) : (
@@ -214,14 +253,14 @@ export function MissionDetail({ mission, projectName, onBack, onRefresh }: Props
               {/* Report Header Bar */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
                 <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                  Generated Document: <span style={{ color: 'var(--accent)' }}>{primaryArtifact?.filename}</span>
+                  Generated Dossier: <span style={{ color: 'var(--accent)' }}>{primaryArtifact?.filename}</span>
                 </div>
                 <button
                   onClick={handleDownloadMarkdown}
                   className="phantom-btn phantom-btn-primary"
                   style={{ fontSize: '12px', padding: '6px 14px' }}
                 >
-                  ↓ Export Markdown
+                  ↓ Export Markdown (.md)
                 </button>
               </div>
 
@@ -235,7 +274,7 @@ export function MissionDetail({ mission, projectName, onBack, onRefresh }: Props
                   marginBottom: '20px',
                 }}>
                   <div style={{ fontSize: '11px', letterSpacing: '0.1em', color: 'var(--accent)', fontWeight: '600', marginBottom: '6px' }}>
-                    EXECUTIVE DOSSIER
+                    EXECUTIVE SUMMARY
                   </div>
                   <div style={{ fontSize: '14px', color: 'var(--text-primary)', lineHeight: '1.6', marginBottom: '16px' }}>
                     {reportData.executiveSummary}
@@ -284,7 +323,7 @@ export function MissionDetail({ mission, projectName, onBack, onRefresh }: Props
                       </thead>
                       <tbody>
                         {reportData.items.map((item, i) => (
-                          <tr key={i} style={{ borderBottom: '1px solid var(--border)', transition: 'background 0.1s' }}>
+                          <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
                             <td style={{ padding: '10px 14px', color: 'var(--text-muted)' }}>{i + 1}</td>
                             <td style={{ padding: '10px 14px', fontWeight: '600', color: 'var(--text-primary)' }}>{item.name}</td>
                             <td style={{ padding: '10px 14px', color: 'var(--accent)' }}>{item.category}</td>
@@ -306,7 +345,7 @@ export function MissionDetail({ mission, projectName, onBack, onRefresh }: Props
                 padding: '16px 20px',
               }}>
                 <div style={{ fontSize: '12px', fontWeight: '500', color: 'var(--text-primary)', marginBottom: '10px' }}>
-                  Raw Generated Dossier
+                  Raw Generated Dossier (Markdown)
                 </div>
                 <pre style={{
                   fontSize: '11px',

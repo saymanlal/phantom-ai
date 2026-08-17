@@ -6,7 +6,6 @@ export type IntentCategory =
   | 'CHIT_CHAT'
   | 'SYSTEM_QUERY'
   | 'NEED_CLARIFICATION'
-  | 'DIRECT_SUGGESTION'
   | 'TALKING_TO_OTHERS'
   | 'VOICE_CONTROL'
   | 'RESEARCH'
@@ -27,107 +26,135 @@ export interface ConversationalResponse {
 }
 
 export class IntentEngine {
-  // Advanced Hinglish / Hindi / English bidirectional understanding
-  // Includes background ambient speech filtering (detects if user is talking to someone else)
+  // Pure conversational distinction vs true execution missions
   evaluateConversational(input: string): ConversationalResponse {
     const trimmed = input.trim();
     const lower = trimmed.toLowerCase();
 
-    // 1. THIRD-PARTY / TALKING-TO-OTHERS FILTER
-    // If the speech clearly addresses someone else (mom, brother, calling someone else, background noise)
-    if (
-      /^(bhai sun|mummy|are yaar sun|ek minute ruko bhai|wait bro not you|phone pe hu|calling you later|hold on guys|bro shut up|arre bhai usko bol|pani lana)/i.test(
-        trimmed
-      )
-    ) {
+    // 1. THIRD-PARTY / AMBIENT TALK DETECTION
+    if (/^(bhai sun|mummy|are yaar|ek minute|phone pe hu|calling you later|hold on|bro shut up|arre bhai|pani lana)/i.test(trimmed)) {
       return {
         isConversation: true,
         category: 'TALKING_TO_OTHERS',
         ignoredAsThirdParty: true,
-        reply: "*(Ambient speech detected — listening in standby mode)*",
+        reply: "*(Ambient background speech detected — listening in standby)*",
       };
     }
 
-    // 2. VOICE CONTROLS (Hindi / English / Hinglish)
-    if (/^(stop listening|chup ho jao|shant raho|mute|pause voice|awaz band karo|ruk jao)[\s!.]*$/i.test(trimmed)) {
+    // 2. VOICE CONTROLS
+    if (/^(stop listening|chup|shant|mute|pause voice|awaz band|ruk jao)[\s!.]*$/i.test(trimmed)) {
       return {
         isConversation: true,
         category: 'VOICE_CONTROL',
-        reply: "Voice output muted. Still active on standby — say 'Phantom resume' or speak whenever you need me.",
+        reply: "Voice output muted. Still active on standby — say 'Phantom resume' whenever you need me.",
       };
     }
 
-    if (/^(start listening|unmute|awaz chalu karo|phantom suno|phantom bolna chalu karo)[\s!.]*$/i.test(trimmed)) {
+    if (/^(start listening|unmute|awaz chalu|phantom suno|phantom bolo)[\s!.]*$/i.test(trimmed)) {
       return {
         isConversation: true,
         category: 'VOICE_CONTROL',
-        reply: "Voice output fully active. Main sun raha hu, bataiye kya karna hai.",
+        reply: "Voice output active. Main sun raha hu, bataiye kya task execute karna hai.",
       };
     }
 
-    // 3. GREETINGS & HINGLISH CHIT-CHAT
-    if (/^(hi|hello|hey|kya hal hai|kaisa hai|namaste|pranam|what's up|wassup|yo phantom|kaise ho)[\s!.]*$/i.test(trimmed)) {
+    // 3. GREETINGS & CASUAL QUESTIONS (Strict conversational match)
+    if (/^(hi|hello|hey|kya hal hai|kaisa hai|namaste|pranam|what's up|wassup|yo phantom|kaise ho|good\s+(morning|afternoon|evening))[\s!.]*$/i.test(trimmed)) {
       return {
         isConversation: true,
         category: 'CHIT_CHAT',
-        reply: "Ekdam badhiya! PHANTOM OS is running at 100% efficiency. Kuch naya research karna hai, koi dataset analyze karna hai, ya koi automate workflow run kare?",
+        reply: "Hello! Main bilkul ready hu. PHANTOM OS running at 100%. Aap research, dataset analysis, ya koi custom automation shuru kar sakte hain.",
         suggestedQuestions: [
-          "Research 50 AI startups in India",
-          "Analyze revenue CSV data",
-          "What is my current system status?",
-          "Monitor TechCrunch AI news",
+          "Research 50 AI startups in India and create report",
+          "Analyze CSV dataset for revenue anomalies",
+          "What are the top Indic language AI models?",
+          "Monitor TechCrunch AI funding news",
         ],
       };
     }
 
-    // 4. RANDOM CHIT-CHAT & PHILOSOPHICAL / TECH OPINIONS
-    if (/^(batao kuch naya|tell me something interesting|kya chal raha hai|what are you thinking|bore ho raha hu)[\s?!.]*$/i.test(trimmed)) {
-      return {
-        isConversation: true,
-        category: 'CHIT_CHAT',
-        reply: "Dilchasp baat: Sovereign Indic LLMs (like Sarvam & Krutrim) and Edge AI startups are scaling 3x faster this year across Tier 2/3 Indian cities. Agar aap chaho toh hum global vs Indian AI valuations ka ek direct comparison report bana sakte hain.",
-        suggestedQuestions: [
-          "Compare Indian vs US AI funding trends",
-          "Find top 10 Indic speech AI models",
-          "Check upcoming AI conferences",
-        ],
-      };
-    }
-
-    if (/^(who are you|who made you|tum kaun ho|phantom kya hai|kya kar sakte ho)[\s?!.]*$/i.test(trimmed)) {
+    // 4. NAME & IDENTITY INQUIRIES
+    if (/^(what is your name|what's your name|who are you|tumhara naam kya hai|naam kya hai|aap kaun ho|who made you|tum kaun ho)[\s?!.]*$/i.test(trimmed)) {
       return {
         isConversation: true,
         category: 'CONVERSATION',
-        reply: "Main PHANTOM AI hu — aapka autonomous personal operating system. Mai chatbot nahi hu; mai outcomes execute karta hu: Autonomous research, task DAG execution, data verification, aur background workflows. Both Hindi and English comfortably.",
+        reply: "Mera naam PHANTOM AI hai — aapka autonomous personal network operating system. Mai simple chatbot nahi hu; mai outcomes execute karta hu: Deep web research, task DAGs, statistical data processing, aur cross-device persistent memory.",
         suggestedQuestions: [
+          "Research 50 AI startups in India",
           "Show available capabilities",
-          "Create a new market research project",
+          "Create a new research project",
+        ],
+      };
+    }
+
+    if (/^(how are you|how are you doing|kaisa chal raha hai|sab kaisa hai|sab theek)[\s?!.]*$/i.test(trimmed)) {
+      return {
+        isConversation: true,
+        category: 'CHIT_CHAT',
+        reply: "Sab badhiya chal raha hai! All local workers, IndexedDB event store, and server state sync are operating normally. Bataiye, aaj kis project pe kaam karna hai?",
+        suggestedQuestions: [
+          "Research 50 Indian AI startups and create report",
+          "Check system status",
+          "Create a new market intelligence project",
+        ],
+      };
+    }
+
+    if (/^(tell me something interesting|kuch naya batao|what are you thinking|bore ho raha hu)[\s?!.]*$/i.test(trimmed)) {
+      return {
+        isConversation: true,
+        category: 'CHIT_CHAT',
+        reply: "Interesting trend: India me Generative AI aur Indic LLMs (jaise Sarvam AI aur Krutrim) me sovereign cloud compute funding 300% grow hui hai. Healthcare diagnostics jaise Qure.ai aur Niramai ab US FDA cleared hain. Kya aap inka detailed breakdown dekhna chahenge?",
+        suggestedQuestions: [
+          "Research 50 AI startups in India and create report",
+          "Compare Indian vs US AI funding",
+          "Check top Indic speech AI models",
+        ],
+      };
+    }
+
+    if (/^(help|commands|what can you do|capabilities|kya kar sakte ho)[\s?!.]*$/i.test(trimmed)) {
+      return {
+        isConversation: true,
+        category: 'SYSTEM_QUERY',
+        reply: "PHANTOM Capabilities:\n• 🔍 Deep Research: Multi-source discovery, verification & verified company dossiers\n• 📊 Data Engine: CSV / XLSX statistical profiling & anomaly detection\n• 🌐 Cross-Device Cloud Sync: Missions & artifacts saved across all phones & PCs\n• 🎙️ Bilingual Voice: Hands-free voice commands in Hindi, English & Hinglish\n• 🛡️ Central Permissions: Granular ALLOW / ASK / DENY control.",
+        suggestedQuestions: [
+          "Research 50 AI startups in India",
+          "Analyze CSV dataset",
           "Check permission settings",
         ],
       };
     }
 
-    // 5. INTELLIGENT QUESTIONING / UNDERSPECIFIED OBJECTIVES
-    // If the user gives a single vague keyword like "startups" or "research" or "data"
+    // 5. Broad single-keyword clarification
     if (/^(startups|research|companies|analyze|data|report)$/i.test(trimmed)) {
       return {
         isConversation: true,
         category: 'NEED_CLARIFICATION',
         requiresUserInput: true,
-        reply: `Aapne "${trimmed}" specify kiya hai, par target thoda broad hai. Kis sector ya region me focus karna hai?`,
+        reply: `Aapne "${trimmed}" enter kiya hai. Kis specific domain ya region me focus karna hai? Niche diye options me se choose karein:`,
         suggestedQuestions: [
-          `Find 50 Indian AI ${trimmed} and create report`,
-          `Deep research on global generative AI ${trimmed}`,
-          `Quick scan of top 10 funded ${trimmed}`,
+          `Research 50 Indian AI ${trimmed} and create report`,
+          `Deep analysis of top 10 funded ${trimmed}`,
+          `Quick scan of global generative AI ${trimmed}`,
         ],
       };
     }
 
-    if (/^(status|health|system status|check providers|sab kaisa hai)[\s?!.]*$/i.test(trimmed)) {
+    // Check if input is a direct conversational question without any action verb
+    if (
+      /^(why|what|how|where|when|who|is it|can you|are you)\s+/i.test(trimmed) &&
+      !/\b(research|find|discover|search|analyze|monitor|create|build|generate|report|fix|debug)\b/i.test(lower)
+    ) {
       return {
         isConversation: true,
-        category: 'SYSTEM_QUERY',
-        reply: "System Status: HEALTHY 🟢\n• Kernel: Initialized\n• Voice Engine: Web Speech API (Bilingual Eng/Hindi)\n• Execution: BrowserWorkerProvider (Active)\n• Memory Store: IndexedDB (Event-Sourced)\n• All Safety Controls: Active",
+        category: 'CONVERSATION',
+        reply: `PHANTOM Operator: Mai aapke sawal "${trimmed}" ko samajh gaya. Autonomous mission trigger karne ke liye 'Research', 'Analyze', ya 'Create' command use karein, ya neeche diye options me se direct start karein:`,
+        suggestedQuestions: [
+          `Research: ${trimmed}`,
+          "Research 50 Indian AI startups and create report",
+          "Show available capabilities",
+        ],
       };
     }
 
