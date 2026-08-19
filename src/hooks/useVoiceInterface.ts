@@ -97,10 +97,12 @@ export function useVoiceInterface(
 
     if (!cleanText) return;
 
-    try {
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.resume();
-    } catch {}
+    // Only cancel if actively speaking, and do not call cancel() synchronously before speak()
+    if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {}
+    }
 
     const utterance = new SpeechSynthesisUtterance(cleanText);
     utterance.rate = 1.0;
@@ -135,19 +137,31 @@ export function useVoiceInterface(
           utterance.voice = selectedVoice;
         }
 
-        utterance.onstart = () => setIsSpeaking(true);
+        utterance.onstart = () => {
+          setIsSpeaking(true);
+        };
         utterance.onend = () => {
           setIsSpeaking(false);
           currentUtteranceRef.current = null;
         };
         utterance.onerror = (e) => {
-          console.warn('[PHANTOM Voice] TTS error:', e);
+          // Ignore 'canceled' or 'interrupted' events caused by user speech interruptions
+          if (e.error !== 'canceled' && e.error !== 'interrupted') {
+            console.warn('[PHANTOM Voice] TTS error type:', e.error);
+          }
           setIsSpeaking(false);
           currentUtteranceRef.current = null;
         };
 
-        window.speechSynthesis.resume();
-        window.speechSynthesis.speak(utterance);
+        // Microtask delay to ensure browser speech engine has flushed previous canceled state
+        setTimeout(() => {
+          try {
+            window.speechSynthesis.resume();
+            window.speechSynthesis.speak(utterance);
+          } catch (speakErr) {
+            console.warn('[PHANTOM Voice] speak() invocation failed:', speakErr);
+          }
+        }, 50);
       } catch (err) {
         console.warn('[PHANTOM Voice] speak execution error:', err);
         setIsSpeaking(false);
