@@ -1,5 +1,4 @@
-'use client';
-import type { ViewType } from './PhantomApp';
+export type ViewType = 'command' | 'missions' | 'projects' | 'data' | 'activity' | 'notifications' | 'settings';
 
 type NavItem = {
   id: ViewType;
@@ -11,6 +10,7 @@ type NavItem = {
 const NAV_ITEMS: NavItem[] = [
   { id: 'command', label: 'Command', icon: '⌘' },
   { id: 'missions', label: 'Missions', icon: '◉' },
+  { id: 'data', label: 'Data Studio', icon: '📊' },
   { id: 'projects', label: 'Projects', icon: '⬡' },
   { id: 'activity', label: 'Activity', icon: '⊞' },
   { id: 'notifications', label: 'Alerts', icon: '△' },

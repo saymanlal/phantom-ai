@@ -7,10 +7,11 @@ import { MissionsView } from './MissionsView';
 import { ProjectsView } from './ProjectsView';
 import { SettingsView } from './SettingsView';
 import { NotificationsView } from './NotificationsView';
-import { CommandPalette } from './CommandPalette';
+import { DataStudioView } from './DataStudioView';
 import { ActivityView } from './ActivityView';
+import { CommandPalette } from './CommandPalette';
 
-export type ViewType = 'command' | 'missions' | 'projects' | 'settings' | 'notifications' | 'activity';
+export type ViewType = 'command' | 'missions' | 'projects' | 'data' | 'activity' | 'settings' | 'notifications';
 
 export function PhantomApp() {
   const kernelState = useKernel();
@@ -53,6 +54,9 @@ export function PhantomApp() {
             projects={kernelState.projects}
             onRefresh={kernelState.refreshState}
           />
+        )}
+        {activeView === 'data' && (
+          <DataStudioView />
         )}
         {activeView === 'projects' && (
           <ProjectsView
