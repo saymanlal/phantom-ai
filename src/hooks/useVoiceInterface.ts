@@ -71,20 +71,20 @@ export function useVoiceInterface(
   useEffect(() => { languageRef.current = language; }, [language]);
 
   // ─── TTS ──────────────────────────────────────────────────────────────────
+  const currentUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+
   const stopSpeaking = useCallback(() => {
     if (typeof window === 'undefined') return;
-    try { window.speechSynthesis?.cancel(); } catch {}
+    try {
+      window.speechSynthesis?.cancel();
+    } catch {}
+    currentUtteranceRef.current = null;
     setIsSpeaking(false);
   }, []);
 
   const speak = useCallback((text: string, priority = false) => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
     if (isMutedRef.current && !priority) return;
-
-    try {
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.resume();
-    } catch {}
 
     const cleanText = text
       .replace(/[*#•—_`>~]/g, ' ')
@@ -97,14 +97,24 @@ export function useVoiceInterface(
 
     if (!cleanText) return;
 
-    const doSpeak = () => {
-      try {
-        window.speechSynthesis.resume();
-        const utterance = new SpeechSynthesisUtterance(cleanText);
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-        utterance.volume = 1.0;
+    try {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume();
+    } catch {}
 
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+
+    // Anchor utterance to prevent browser garbage collection
+    currentUtteranceRef.current = utterance;
+    if (typeof window !== 'undefined') {
+      (window as unknown as { __activeUtterance?: SpeechSynthesisUtterance }).__activeUtterance = utterance;
+    }
+
+    const setVoiceAndSpeak = () => {
+      try {
         const voices = window.speechSynthesis.getVoices();
         const lang = languageRef.current;
 
@@ -126,28 +136,33 @@ export function useVoiceInterface(
         }
 
         utterance.onstart = () => setIsSpeaking(true);
-        utterance.onend = () => setIsSpeaking(false);
+        utterance.onend = () => {
+          setIsSpeaking(false);
+          currentUtteranceRef.current = null;
+        };
         utterance.onerror = (e) => {
           console.warn('[PHANTOM Voice] TTS error:', e);
           setIsSpeaking(false);
+          currentUtteranceRef.current = null;
         };
 
+        window.speechSynthesis.resume();
         window.speechSynthesis.speak(utterance);
       } catch (err) {
         console.warn('[PHANTOM Voice] speak execution error:', err);
         setIsSpeaking(false);
+        currentUtteranceRef.current = null;
       }
     };
 
     if (window.speechSynthesis.getVoices().length > 0) {
-      doSpeak();
+      setVoiceAndSpeak();
     } else {
       window.speechSynthesis.onvoiceschanged = () => {
         window.speechSynthesis.onvoiceschanged = null;
-        doSpeak();
+        setVoiceAndSpeak();
       };
-      // Fallback if event never fires
-      setTimeout(doSpeak, 100);
+      setTimeout(setVoiceAndSpeak, 150);
     }
   }, []);
 
