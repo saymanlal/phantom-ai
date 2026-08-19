@@ -196,83 +196,80 @@ export function useVoiceInterface(
       };
 
       rec.onresult = (event: SpeechRecognitionEvent) => {
+        // ALWAYS inspect ONLY the latest recognized result in event.results to avoid buffer accumulation
+        const lastIdx = event.results.length - 1;
+        const latestResult = event.results[lastIdx];
+        if (!latestResult || !latestResult[0]) return;
+
+        const spokenChunk = latestResult[0].transcript.trim();
+        const isFinal = latestResult.isFinal;
+        const lowerSpoken = spokenChunk.toLowerCase();
+
+        // ─── 1. WAKE WORD EVALUATION (Works EVEN WHEN MUTED) ───────────
+        if (/\b(phantom wake up|phantom suno|unmute|start listening|phantom bolo|activate|sun rahe ho)\b/i.test(lowerSpoken)) {
+          isMutedRef.current = false;
+          setIsMuted(false);
+          setTranscript('');
+          setAudioLevel(0);
+          speak("Voice active. Main sun raha hu.", true);
+          return;
+        }
+
+        // ─── 2. SLEEP / MUTE EVALUATION ─────────────────────────────────
+        if (/\b(phantom stop|chup ho jao|mute voice|stop listening|voice band|awaz band|shant raho)\b/i.test(lowerSpoken)) {
+          isMutedRef.current = true;
+          setIsMuted(true);
+          stopSpeaking();
+          setTranscript('');
+          setAudioLevel(0);
+          speak("Voice muted. Standby pe hu.", true);
+          return;
+        }
+
+        // If in Muted/Standby mode, ignore all other speech (do not process commands)
         if (isMutedRef.current) return;
 
-        let interimText = '';
-        let finalText = '';
-
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const r = event.results[i];
-          if (!r[0]) continue;
-          const t = r[0].transcript.trim();
-          if (r.isFinal) {
-            finalText += (finalText ? ' ' : '') + t;
-          } else {
-            interimText += (interimText ? ' ' : '') + t;
-          }
+        // ─── 3. AMBIENT BACKGROUND SPEECH FILTER ────────────────────────
+        if (/^(bhai sun|mummy|are yaar|ek minute ruko|wait guys|phone pe hu|hold on)/i.test(lowerSpoken)) {
+          return;
         }
 
-        // Show live interim
-        if (interimText) {
-          setTranscript(interimText);
-          setAudioLevel(Math.min(100, interimText.length * 6));
+        // ─── 4. LIVE TRANSCRIPT DISPLAY ────────────────────────────────
+        if (!isFinal) {
+          setTranscript(spokenChunk);
+          setAudioLevel(Math.min(100, spokenChunk.length * 7));
         }
 
-        if (finalText) {
+        // ─── 5. DISPATCH ON FINAL SPEECH ───────────────────────────────
+        if (isFinal) {
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           setTranscript('');
           setAudioLevel(0);
 
-          // Prevent duplicate dispatch (same final text within 1s)
-          if (finalText === lastFinalTextRef.current) return;
-          lastFinalTextRef.current = finalText;
-          setTimeout(() => { lastFinalTextRef.current = ''; }, 1200);
+          if (!spokenChunk) return;
+          if (spokenChunk === lastFinalTextRef.current) return;
+          lastFinalTextRef.current = spokenChunk;
+          setTimeout(() => { lastFinalTextRef.current = ''; }, 1400);
 
-          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          // Interrupt TTS when new user command finishes
+          stopSpeaking();
 
-          // Interrupt TTS if new command comes in
-          if (window.speechSynthesis?.speaking) {
-            stopSpeaking();
-          }
-
-          // Voice control commands handled here (before forwarding)
-          const lf = finalText.toLowerCase();
-          if (/\b(phantom stop|chup ho jao|mute|stop listening|voice band|awaz band)\b/i.test(lf)) {
-            isMutedRef.current = true;
-            setIsMuted(true);
-            shouldBeRunningRef.current = false;
-            try { rec.abort(); } catch {}
-            setIsListening(false);
-            setTranscript('');
-            speak("Voice muted.", true);
-            return;
-          }
-          if (/\b(phantom wake up|phantom suno|unmute|start listening|awaz chalu|phantom bolo)\b/i.test(lf)) {
-            isMutedRef.current = false;
-            setIsMuted(false);
-            shouldBeRunningRef.current = true;
-            speak("Voice active.", true);
-            // Will auto-restart via onend
-            return;
-          }
-
-          // Ambient speech filter
-          if (/^(bhai sun|mummy|are yaar|ek minute ruko|wait guys|phone pe hu|hold on)/i.test(finalText)) return;
-
-          onCommandRef.current?.(finalText);
-        } else if (interimText) {
-          // Debounce interim to catch natural pauses
+          onCommandRef.current?.(spokenChunk);
+        } else {
+          // Debounce fallback for browsers with slow isFinal events
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = setTimeout(() => {
-            const t = interimText.trim();
-            if (!t || isMutedRef.current) return;
-            if (t === lastFinalTextRef.current) return;
-            lastFinalTextRef.current = t;
-            setTimeout(() => { lastFinalTextRef.current = ''; }, 1200);
+            if (isMutedRef.current) return;
+            const clean = spokenChunk;
+            if (!clean || clean === lastFinalTextRef.current) return;
+            lastFinalTextRef.current = clean;
+            setTimeout(() => { lastFinalTextRef.current = ''; }, 1400);
+
             setTranscript('');
             setAudioLevel(0);
-            if (window.speechSynthesis?.speaking) stopSpeaking();
-            onCommandRef.current?.(t);
-          }, 1100);
+            stopSpeaking();
+            onCommandRef.current?.(clean);
+          }, 950);
         }
       };
 
