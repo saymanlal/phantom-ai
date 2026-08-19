@@ -81,50 +81,64 @@ export function useVoiceInterface(
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
     if (isMutedRef.current && !priority) return;
 
-    try { window.speechSynthesis.cancel(); } catch {}
-    try { window.speechSynthesis.resume(); } catch {}
+    try {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume();
+    } catch {}
 
     const cleanText = text
-      .replace(/[*#•—_`>]/g, ' ')
+      .replace(/[*#•—_`>~]/g, ' ')
       .replace(/→/g, '')
+      .replace(/[\(\)\[\]\{\}]/g, '')
       .replace(/\n+/g, '. ')
       .replace(/\s+/g, ' ')
       .trim()
-      .slice(0, 280); // keep TTS short & natural
+      .slice(0, 350);
 
     if (!cleanText) return;
 
-    setIsSpeaking(true);
-
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.rate = 1.05;
-    utterance.pitch = 1.0;
-    utterance.volume = 1.0;
-
-    // Voice selection
     const doSpeak = () => {
-      const voices = window.speechSynthesis.getVoices();
-      const hindiVoice = voices.find(v =>
-        v.lang.startsWith('hi') || v.name.toLowerCase().includes('hindi')
-      );
-      const indiaVoice = voices.find(v =>
-        v.lang === 'en-IN' || v.name.toLowerCase().includes('india') || v.name.toLowerCase().includes('ravi') || v.name.toLowerCase().includes('heera')
-      );
-      const gbVoice = voices.find(v => v.lang === 'en-GB');
-      const anyEnglish = voices.find(v => v.lang.startsWith('en'));
+      try {
+        window.speechSynthesis.resume();
+        const utterance = new SpeechSynthesisUtterance(cleanText);
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
 
-      const hasDevanagari = /[\u0900-\u097F]/.test(cleanText);
-      if (hasDevanagari && hindiVoice) utterance.voice = hindiVoice;
-      else if (indiaVoice) utterance.voice = indiaVoice;
-      else if (gbVoice) utterance.voice = gbVoice;
-      else if (anyEnglish) utterance.voice = anyEnglish;
+        const voices = window.speechSynthesis.getVoices();
+        const lang = languageRef.current;
 
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
-      window.speechSynthesis.speak(utterance);
+        let selectedVoice: SpeechSynthesisVoice | undefined;
+        if (lang === 'hi-IN' || /[\u0900-\u097F]/.test(cleanText)) {
+          selectedVoice = voices.find(v => v.lang.startsWith('hi') || v.name.toLowerCase().includes('hindi'));
+        }
+        
+        if (!selectedVoice && (lang === 'en-IN' || lang === 'hi-IN')) {
+          selectedVoice = voices.find(v => v.lang === 'en-IN' || v.name.toLowerCase().includes('india') || v.name.toLowerCase().includes('ravi') || v.name.toLowerCase().includes('heera'));
+        }
+
+        if (!selectedVoice) {
+          selectedVoice = voices.find(v => v.lang.startsWith('en'));
+        }
+
+        if (selectedVoice) {
+          utterance.voice = selectedVoice;
+        }
+
+        utterance.onstart = () => setIsSpeaking(true);
+        utterance.onend = () => setIsSpeaking(false);
+        utterance.onerror = (e) => {
+          console.warn('[PHANTOM Voice] TTS error:', e);
+          setIsSpeaking(false);
+        };
+
+        window.speechSynthesis.speak(utterance);
+      } catch (err) {
+        console.warn('[PHANTOM Voice] speak execution error:', err);
+        setIsSpeaking(false);
+      }
     };
 
-    // Voices may not be loaded yet
     if (window.speechSynthesis.getVoices().length > 0) {
       doSpeak();
     } else {
@@ -132,6 +146,8 @@ export function useVoiceInterface(
         window.speechSynthesis.onvoiceschanged = null;
         doSpeak();
       };
+      // Fallback if event never fires
+      setTimeout(doSpeak, 100);
     }
   }, []);
 
@@ -286,6 +302,22 @@ export function useVoiceInterface(
       try { recognitionRef.current?.abort(); } catch {}
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Global user gesture unlock for SpeechSynthesis (required by modern browsers)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    const unlockAudio = () => {
+      try {
+        window.speechSynthesis.resume();
+      } catch {}
+    };
+    window.addEventListener('click', unlockAudio, { once: false });
+    window.addEventListener('keydown', unlockAudio, { once: false });
+    return () => {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+    };
   }, []);
 
   // Restart when language changes
