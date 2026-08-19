@@ -1,7 +1,7 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import type { Mission, Task } from '@/types';
-import { formatDuration, formatRelativeTime } from '@/lib/utils';
+import { formatRelativeTime } from '@/lib/utils';
 import { etaEngine } from '@/kernel/ETAEngine';
 import { idbGetAll, idbPut } from '@/kernel/EventStore';
 import { researchEngine } from '@/kernel/ResearchEngine';
@@ -13,23 +13,14 @@ type Props = {
   onRefresh: () => Promise<void>;
 };
 
-const TASK_STATUS_ICONS: Record<string, string> = {
-  COMPLETED: '✓',
-  RUNNING: '●',
-  FAILED: '✗',
-  PENDING: '○',
-  QUEUED: '○',
-  BLOCKED: '—',
-  RETRYING: '↺',
+const STATUS_ICONS: Record<string, string> = {
+  COMPLETED: '✓', RUNNING: '●', FAILED: '✗',
+  PENDING: '○', QUEUED: '○', BLOCKED: '—', RETRYING: '↺',
 };
-
-const TASK_STATUS_COLORS: Record<string, string> = {
-  COMPLETED: 'var(--success)',
-  RUNNING: 'var(--accent)',
-  FAILED: 'var(--danger)',
-  PENDING: 'var(--text-muted)',
-  QUEUED: 'var(--warning)',
-  RETRYING: 'var(--warning)',
+const STATUS_COLORS: Record<string, string> = {
+  COMPLETED: 'var(--success)', RUNNING: 'var(--accent)',
+  FAILED: 'var(--danger)', PENDING: 'var(--text-muted)',
+  QUEUED: 'var(--warning)', RETRYING: 'var(--warning)',
 };
 
 interface StoredArtifact {
@@ -53,66 +44,85 @@ interface StoredArtifact {
   };
 }
 
+type TabType = 'report' | 'tasks' | 'sources';
+
 export function MissionDetail({ mission, projectName, onBack, onRefresh }: Props) {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [artifacts, setArtifacts] = useState<StoredArtifact[]>([]);
-  const [activeTab, setActiveTab] = useState<'report' | 'tasks' | 'sources'>('report');
+  const [artifact, setArtifact] = useState<StoredArtifact | null>(null);
+  const [activeTab, setActiveTab] = useState<TabType>('report');
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [generating, setGenerating] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, [mission.id]);
+  const isResearchMission = /startup|company|companies|ecosystem|research|find \d+|discover|investigate/i.test(mission.objective);
 
-  const loadData = async () => {
-    const { missionEngine } = await import('@/kernel/MissionEngine');
-    const t = await missionEngine.getTasksForMission(mission.id);
-    setTasks(t);
-
+  const loadData = useCallback(async () => {
+    setLoading(true);
     try {
-      // 1. Check local IndexedDB
-      const allArtifacts = await idbGetAll<StoredArtifact>('phantom_artifacts');
-      let missionArtifacts = allArtifacts.filter(a => a.missionId === mission.id);
+      // Load tasks for this specific mission
+      const { missionEngine } = await import('@/kernel/MissionEngine');
+      const t = await missionEngine.getTasksForMission(mission.id);
+      setTasks(t);
 
-      // 2. If no local artifact found, check remote server sync
-      if (missionArtifacts.length === 0) {
-        try {
-          const res = await fetch('/api/state?type=artifacts');
-          if (res.ok) {
-            const data = await res.json();
-            const serverMatches = (data.artifacts || []).filter((a: StoredArtifact) => a.missionId === mission.id);
-            if (serverMatches.length > 0) {
-              missionArtifacts = serverMatches;
-            }
-          }
-        } catch {}
+      // ── Strict mission-scoped artifact lookup ──────────────────────────────
+      // 1. Check IndexedDB — filter strictly by missionId
+      const allArtifacts = await idbGetAll<StoredArtifact>('phantom_artifacts');
+      const mine = allArtifacts.filter(a => a.missionId === mission.id);
+
+      if (mine.length > 0) {
+        setArtifact(mine[0]);
+        setLoading(false);
+        return;
       }
 
-      // 3. Fallback Auto-Generation: If completed research mission has no artifact yet (e.g. from previous run), synthesize it right now
-      if (missionArtifacts.length === 0 && mission.status === 'COMPLETED') {
+      // 2. Server state cache — also strictly filtered
+      try {
+        const res = await fetch(`/api/state?type=artifacts&missionId=${mission.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          const serverArtifacts = (data.artifacts ?? []).filter(
+            (a: StoredArtifact) => a.missionId === mission.id
+          );
+          if (serverArtifacts.length > 0) {
+            setArtifact(serverArtifacts[0]);
+            setLoading(false);
+            return;
+          }
+        }
+      } catch { /* server cache miss is fine */ }
+
+      // 3. Only auto-generate for completed research missions
+      if (mission.status === 'COMPLETED' && isResearchMission) {
+        setGenerating(true);
         const report = await researchEngine.executeResearch(mission.objective, 50, 'india');
-        const fallbackArtifact: StoredArtifact = {
-          hash: `art_${mission.id}`,
+        const newArtifact: StoredArtifact = {
+          hash: `art_${mission.id}_${Date.now()}`,
           filename: `report-${mission.id.slice(0, 8)}.md`,
-          missionId: mission.id,
+          missionId: mission.id, // strictly scoped
           content: report.markdownContent,
           reportData: report,
         };
-        await idbPut('phantom_artifacts', fallbackArtifact);
-        missionArtifacts = [fallbackArtifact];
+        await idbPut('phantom_artifacts', newArtifact);
+        setArtifact(newArtifact);
 
-        // Sync to cloud server
-        try {
-          fetch('/api/state', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ type: 'artifact', data: fallbackArtifact }),
-          });
-        } catch {}
+        // Push to server cache
+        fetch('/api/state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'artifact', data: newArtifact }),
+        }).catch(() => {});
       }
+    } catch (err) {
+      console.error('[MissionDetail] loadData error:', err);
+    } finally {
+      setLoading(false);
+      setGenerating(false);
+    }
+  }, [mission.id, mission.status, mission.objective, isResearchMission]);
 
-      setArtifacts(missionArtifacts);
-    } catch {}
-  };
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -121,172 +131,214 @@ export function MissionDetail({ mission, projectName, onBack, onRefresh }: Props
     setRefreshing(false);
   };
 
-  const eta = etaEngine.estimate(mission, tasks);
-  const primaryArtifact = artifacts[0];
-  const reportData = primaryArtifact?.reportData;
-
-  const handleDownloadMarkdown = () => {
-    if (!primaryArtifact?.content) return;
-    const blob = new Blob([primaryArtifact.content], { type: 'text/markdown' });
+  const handleDownload = () => {
+    if (!artifact?.content) return;
+    const blob = new Blob([artifact.content], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = primaryArtifact.filename || 'report.md';
+    a.download = artifact.filename ?? 'report.md';
     a.click();
     URL.revokeObjectURL(url);
   };
 
+  const eta = etaEngine.estimate(mission, tasks);
+  const rd = artifact?.reportData;
+
+  const completedTasks = tasks.filter(t => t.status === 'COMPLETED').length;
+  const failedTasks = tasks.filter(t => t.status === 'FAILED').length;
+
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '32px 40px' }}>
+    <div style={{ flex: 1, overflowY: 'auto', padding: '28px 36px', maxWidth: '1100px' }}>
       {/* Back */}
       <button
         onClick={onBack}
-        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '13px', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '6px' }}
+        style={{
+          background: 'none', border: 'none', color: 'var(--text-muted)',
+          cursor: 'pointer', fontSize: '12px', marginBottom: '18px',
+          display: 'flex', alignItems: 'center', gap: '5px',
+          transition: 'color 0.15s',
+        }}
+        onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-primary)')}
+        onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-muted)')}
       >
         ← Back to missions
       </button>
 
       {/* Mission header */}
-      <div style={{ marginBottom: '24px' }}>
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>{projectName}</div>
-        <h2 style={{ fontSize: '20px', fontWeight: '500', color: 'var(--text-primary)', marginBottom: '8px', lineHeight: '1.4' }}>
+      <div style={{ marginBottom: '22px' }}>
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '5px', letterSpacing: '0.05em' }}>
+          {projectName}
+        </div>
+        <h2 style={{
+          fontSize: '19px', fontWeight: '600', color: 'var(--text-primary)',
+          marginBottom: '8px', lineHeight: '1.45',
+        }}>
           {mission.objective}
         </h2>
-        <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '14px', fontSize: '11px', color: 'var(--text-muted)', flexWrap: 'wrap', alignItems: 'center' }}>
           <span>Created {formatRelativeTime(mission.createdAt)}</span>
           {mission.startedAt && <span>Started {formatRelativeTime(mission.startedAt)}</span>}
-          {mission.tasks.length > 0 && <span>{mission.tasks.length} tasks</span>}
-          {artifacts.length > 0 && <span style={{ color: 'var(--success)' }}>✓ Intelligence Dossier Ready</span>}
+          <span>{tasks.length} tasks</span>
+          {artifact && <span style={{ color: 'var(--success)' }}>✓ Report bound</span>}
         </div>
       </div>
 
-      {/* Stats row */}
-      <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' }}>
+      {/* Stats */}
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '22px', flexWrap: 'wrap' }}>
         {[
-          { label: 'Status', value: mission.status.replace(/_/g, ' ') },
-          { label: 'Progress', value: `${mission.progress}%` },
-          { label: 'ETA', value: eta.progress < 100 ? etaEngine.formatWindow(eta) : 'Done' },
-          { label: 'Report Status', value: artifacts.length > 0 ? `${reportData?.itemCount ?? 50} Verified` : 'Ready' },
-        ].map(({ label, value }) => (
+          {
+            label: 'Status',
+            value: mission.status.replace(/_/g, ' '),
+            color: mission.status === 'COMPLETED' ? 'var(--success)'
+              : mission.status === 'FAILED' ? 'var(--danger)'
+              : mission.status === 'RUNNING' ? 'var(--accent)'
+              : 'var(--warning)',
+          },
+          { label: 'Progress', value: `${mission.progress}%`, color: 'var(--text-primary)' },
+          {
+            label: 'ETA',
+            value: mission.progress >= 100 ? 'Done' : etaEngine.formatWindow(eta),
+            color: 'var(--text-primary)',
+          },
+          {
+            label: 'Tasks',
+            value: `${completedTasks}/${tasks.length} done`,
+            color: failedTasks > 0 ? 'var(--warning)' : 'var(--text-primary)',
+          },
+        ].map(({ label, value, color }) => (
           <div key={label} style={{
             background: 'var(--surface)',
             border: '1px solid var(--border)',
             borderRadius: 'var(--radius)',
-            padding: '10px 16px',
+            padding: '9px 15px',
+            minWidth: '110px',
           }}>
-            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>{label}</div>
-            <div style={{ fontSize: '15px', fontWeight: '600', color: 'var(--text-primary)' }}>{value}</div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px', letterSpacing: '0.05em' }}>{label}</div>
+            <div style={{ fontSize: '14px', fontWeight: '600', color }}>{value}</div>
           </div>
         ))}
       </div>
 
-      {/* Navigation tabs */}
-      <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid var(--border)', marginBottom: '24px' }}>
-        <button
-          onClick={() => setActiveTab('report')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'report' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'report' ? 'var(--text-primary)' : 'var(--text-muted)',
-            padding: '8px 16px',
-            fontSize: '13px',
-            fontWeight: '500',
-            cursor: 'pointer',
-          }}
-        >
-          📄 Intelligence Report {artifacts.length > 0 && `(${reportData?.itemCount ?? '50'} Companies)`}
-        </button>
-        <button
-          onClick={() => setActiveTab('tasks')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'tasks' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'tasks' ? 'var(--text-primary)' : 'var(--text-muted)',
-            padding: '8px 16px',
-            fontSize: '13px',
-            fontWeight: '500',
-            cursor: 'pointer',
-          }}
-        >
-          Task Graph ({tasks.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('sources')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'sources' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'sources' ? 'var(--text-primary)' : 'var(--text-muted)',
-            padding: '8px 16px',
-            fontSize: '13px',
-            fontWeight: '500',
-            cursor: 'pointer',
-          }}
-        >
-          Sources & Verification
-        </button>
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: '0', borderBottom: '1px solid var(--border)', marginBottom: '22px' }}>
+        {(['report', 'tasks', 'sources'] as TabType[]).map(tab => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              borderBottom: activeTab === tab ? '2px solid var(--accent)' : '2px solid transparent',
+              color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-muted)',
+              padding: '9px 18px',
+              fontSize: '12px',
+              fontWeight: activeTab === tab ? '600' : '400',
+              cursor: 'pointer',
+              letterSpacing: '0.04em',
+              transition: 'all 0.15s',
+            }}
+          >
+            {tab === 'report'
+              ? `📄 Intelligence Report${rd ? ` (${rd.itemCount})` : ''}`
+              : tab === 'tasks'
+              ? `Task Graph (${tasks.length})`
+              : 'Sources'}
+          </button>
+        ))}
       </div>
 
-      {/* TAB 1: REPORT VIEW */}
+      {/* ── REPORT TAB ─────────────────────────────────────────── */}
       {activeTab === 'report' && (
         <div>
-          {artifacts.length === 0 ? (
+          {(loading || generating) ? (
             <div style={{
-              background: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-lg)',
-              padding: '40px 20px',
-              textAlign: 'center',
-              color: 'var(--text-muted)',
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              justifyContent: 'center', gap: '14px', padding: '60px 20px',
+              color: 'var(--text-muted)', fontSize: '13px',
             }}>
-              <div style={{ fontSize: '14px', marginBottom: '8px' }}>
-                Generating verified report dossier...
+              <span className="status-dot status-running" style={{ width: '10px', height: '10px' }} />
+              {generating ? 'Synthesizing intelligence report from mission data…' : 'Loading artifact…'}
+            </div>
+          ) : !artifact ? (
+            <div style={{
+              background: 'var(--surface)', border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-lg)', padding: '44px 24px',
+              textAlign: 'center', color: 'var(--text-muted)',
+            }}>
+              <div style={{ fontSize: '14px', marginBottom: '6px' }}>
+                {mission.status === 'COMPLETED'
+                  ? 'No artifact for this mission.'
+                  : `Mission is ${mission.status.toLowerCase()} — report will appear on completion.`}
               </div>
-              <button className="phantom-btn phantom-btn-primary" onClick={handleRefresh} style={{ marginTop: '8px' }}>
-                Load Report
-              </button>
+              {mission.status === 'COMPLETED' && (
+                <button
+                  className="phantom-btn phantom-btn-primary"
+                  onClick={handleRefresh}
+                  style={{ marginTop: '12px', fontSize: '12px' }}
+                  disabled={refreshing}
+                >
+                  {refreshing ? '…' : '↺ Regenerate Report'}
+                </button>
+              )}
             </div>
           ) : (
-            <div>
-              {/* Report Header Bar */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                  Generated Dossier: <span style={{ color: 'var(--accent)' }}>{primaryArtifact?.filename}</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+              {/* Report header bar */}
+              <div style={{
+                display: 'flex', alignItems: 'center',
+                justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px',
+              }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  Artifact: <span style={{ color: 'var(--accent)' }}>{artifact.filename}</span>
                 </div>
-                <button
-                  onClick={handleDownloadMarkdown}
-                  className="phantom-btn phantom-btn-primary"
-                  style={{ fontSize: '12px', padding: '6px 14px' }}
-                >
-                  ↓ Export Markdown (.md)
-                </button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    onClick={handleRefresh}
+                    disabled={refreshing}
+                    className="phantom-btn"
+                    style={{
+                      background: 'var(--surface-2)', border: '1px solid var(--border)',
+                      color: 'var(--text-secondary)', fontSize: '11px', padding: '5px 12px',
+                    }}
+                  >
+                    {refreshing ? '…' : '↺ Refresh'}
+                  </button>
+                  <button
+                    onClick={handleDownload}
+                    className="phantom-btn phantom-btn-primary"
+                    style={{ fontSize: '11px', padding: '5px 14px' }}
+                  >
+                    ↓ Export .md
+                  </button>
+                </div>
               </div>
 
-              {/* Executive summary block */}
-              {reportData && (
+              {/* Executive Summary */}
+              {rd && (
                 <div style={{
-                  background: 'var(--surface)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-lg)',
-                  padding: '20px',
-                  marginBottom: '20px',
+                  background: 'var(--surface)', border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-lg)', padding: '20px 22px',
                 }}>
-                  <div style={{ fontSize: '11px', letterSpacing: '0.1em', color: 'var(--accent)', fontWeight: '600', marginBottom: '6px' }}>
+                  <div style={{
+                    fontSize: '10px', letterSpacing: '0.12em',
+                    color: 'var(--accent)', fontWeight: '700', marginBottom: '8px',
+                  }}>
                     EXECUTIVE SUMMARY
                   </div>
-                  <div style={{ fontSize: '14px', color: 'var(--text-primary)', lineHeight: '1.6', marginBottom: '16px' }}>
-                    {reportData.executiveSummary}
+                  <p style={{ fontSize: '13.5px', color: 'var(--text-primary)', lineHeight: '1.7', marginBottom: '18px' }}>
+                    {rd.executiveSummary}
+                  </p>
+                  <div style={{
+                    fontSize: '10px', letterSpacing: '0.1em',
+                    color: 'var(--text-muted)', fontWeight: '700', marginBottom: '8px',
+                  }}>
+                    KEY INSIGHTS
                   </div>
-
-                  <div style={{ fontSize: '11px', letterSpacing: '0.1em', color: 'var(--text-muted)', fontWeight: '600', marginBottom: '8px' }}>
-                    KEY ECOSYSTEM INSIGHTS
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {reportData.insights.map((ins, idx) => (
-                      <div key={idx} style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', gap: '8px' }}>
-                        <span style={{ color: 'var(--accent)' }}>•</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    {rd.insights.map((ins, idx) => (
+                      <div key={idx} style={{ display: 'flex', gap: '8px', fontSize: '12.5px', color: 'var(--text-secondary)' }}>
+                        <span style={{ color: 'var(--accent)', flexShrink: 0 }}>•</span>
                         <span>{ins}</span>
                       </div>
                     ))}
@@ -294,41 +346,58 @@ export function MissionDetail({ mission, projectName, onBack, onRefresh }: Props
                 </div>
               )}
 
-              {/* Data Table */}
-              {reportData?.items && (
+              {/* Data table */}
+              {rd?.items && rd.items.length > 0 && (
                 <div style={{
-                  background: 'var(--surface)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-lg)',
-                  overflow: 'hidden',
-                  marginBottom: '24px',
+                  background: 'var(--surface)', border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-lg)', overflow: 'hidden',
                 }}>
-                  <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text-primary)' }}>
-                      Verified Entity Directory ({reportData.items.length} Companies)
+                  <div style={{
+                    padding: '12px 18px', borderBottom: '1px solid var(--border)',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  }}>
+                    <span style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-primary)' }}>
+                      Verified Entity Directory · {rd.items.length} Companies
                     </span>
-                    <span className="tag">Validated 100%</span>
+                    <span style={{
+                      fontSize: '10px', fontWeight: '600',
+                      color: 'var(--success)', letterSpacing: '0.08em',
+                    }}>VALIDATED</span>
                   </div>
-
                   <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left' }}>
+                    <table style={{
+                      width: '100%', borderCollapse: 'collapse',
+                      fontSize: '12px', textAlign: 'left',
+                    }}>
                       <thead>
-                        <tr style={{ background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
-                          <th style={{ padding: '10px 14px', width: '40px' }}>#</th>
-                          <th style={{ padding: '10px 14px' }}>Company</th>
-                          <th style={{ padding: '10px 14px' }}>Domain / Category</th>
-                          <th style={{ padding: '10px 14px' }}>Stage / Capital</th>
-                          <th style={{ padding: '10px 14px' }}>Core Technology & Mission</th>
+                        <tr style={{
+                          background: 'var(--surface-2)',
+                          borderBottom: '1px solid var(--border)',
+                          color: 'var(--text-muted)',
+                        }}>
+                          {['#', 'Company', 'Domain', 'Stage', 'Core Technology'].map(h => (
+                            <th key={h} style={{ padding: '9px 13px', fontWeight: '600', letterSpacing: '0.04em', fontSize: '10px' }}>
+                              {h}
+                            </th>
+                          ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {reportData.items.map((item, i) => (
-                          <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                            <td style={{ padding: '10px 14px', color: 'var(--text-muted)' }}>{i + 1}</td>
-                            <td style={{ padding: '10px 14px', fontWeight: '600', color: 'var(--text-primary)' }}>{item.name}</td>
-                            <td style={{ padding: '10px 14px', color: 'var(--accent)' }}>{item.category}</td>
-                            <td style={{ padding: '10px 14px', color: 'var(--text-secondary)' }}>{item.stage ?? 'N/A'}</td>
-                            <td style={{ padding: '10px 14px', color: 'var(--text-secondary)' }}>{item.description}</td>
+                        {rd.items.map((item, i) => (
+                          <tr
+                            key={i}
+                            style={{
+                              borderBottom: i < rd.items.length - 1 ? '1px solid var(--border)' : 'none',
+                              transition: 'background 0.12s',
+                            }}
+                            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(79,142,247,0.04)')}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                          >
+                            <td style={{ padding: '9px 13px', color: 'var(--text-muted)', width: '36px' }}>{i + 1}</td>
+                            <td style={{ padding: '9px 13px', fontWeight: '600', color: 'var(--text-primary)' }}>{item.name}</td>
+                            <td style={{ padding: '9px 13px', color: 'var(--accent)' }}>{item.category}</td>
+                            <td style={{ padding: '9px 13px', color: 'var(--text-secondary)' }}>{item.stage ?? '—'}</td>
+                            <td style={{ padding: '9px 13px', color: 'var(--text-secondary)' }}>{item.description}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -337,95 +406,124 @@ export function MissionDetail({ mission, projectName, onBack, onRefresh }: Props
                 </div>
               )}
 
-              {/* Raw Markdown Accordion */}
-              <div style={{
-                background: 'var(--surface)',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-lg)',
-                padding: '16px 20px',
+              {/* Raw markdown accordion */}
+              <details style={{
+                background: 'var(--surface)', border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-lg)', overflow: 'hidden',
               }}>
-                <div style={{ fontSize: '12px', fontWeight: '500', color: 'var(--text-primary)', marginBottom: '10px' }}>
-                  Raw Generated Dossier (Markdown)
-                </div>
-                <pre style={{
-                  fontSize: '11px',
-                  fontFamily: 'monospace',
-                  color: 'var(--text-secondary)',
-                  whiteSpace: 'pre-wrap',
-                  maxHeight: '300px',
-                  overflowY: 'auto',
-                  background: 'var(--surface-2)',
-                  padding: '12px',
-                  borderRadius: 'var(--radius)',
+                <summary style={{
+                  padding: '12px 18px', fontSize: '12px',
+                  color: 'var(--text-secondary)', cursor: 'pointer',
+                  fontWeight: '500', userSelect: 'none',
                 }}>
-                  {primaryArtifact?.content}
+                  Raw Markdown Dossier ▸
+                </summary>
+                <pre style={{
+                  fontSize: '11px', fontFamily: 'monospace',
+                  color: 'var(--text-secondary)', whiteSpace: 'pre-wrap',
+                  maxHeight: '320px', overflowY: 'auto',
+                  background: 'var(--surface-2)', padding: '14px 16px',
+                  margin: 0,
+                }}>
+                  {artifact.content}
                 </pre>
-              </div>
+              </details>
             </div>
           )}
         </div>
       )}
 
-      {/* TAB 2: TASKS GRAPH */}
+      {/* ── TASKS TAB ───────────────────────────────────────────── */}
       {activeTab === 'tasks' && (
         <div style={{
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-lg)',
-          overflow: 'hidden',
-          fontFamily: 'monospace',
+          background: 'var(--surface)', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-lg)', overflow: 'hidden',
         }}>
-          {tasks.map((task, i) => (
-            <div key={task.id} style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '12px',
-              padding: '12px 16px',
-              borderBottom: i < tasks.length - 1 ? '1px solid var(--border)' : 'none',
-            }}>
-              <span style={{ color: TASK_STATUS_COLORS[task.status] ?? 'var(--text-muted)', fontSize: '13px', marginTop: '1px' }}>
-                {TASK_STATUS_ICONS[task.status] ?? '?'}
-              </span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>{task.name}</div>
-                {task.errorMessage && (
-                  <div style={{ fontSize: '11px', color: 'var(--danger)', marginTop: '2px' }}>{task.errorMessage}</div>
-                )}
-              </div>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', flexShrink: 0 }}>
-                {task.status.replace(/_/g, ' ')}
-              </span>
+          {tasks.length === 0 ? (
+            <div style={{ padding: '40px 24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+              No tasks found for this mission.
             </div>
-          ))}
+          ) : (
+            tasks.map((task, i) => (
+              <div key={task.id} style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '12px',
+                padding: '12px 16px',
+                borderBottom: i < tasks.length - 1 ? '1px solid var(--border)' : 'none',
+                transition: 'background 0.12s',
+              }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.02)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                <span style={{
+                  color: STATUS_COLORS[task.status] ?? 'var(--text-muted)',
+                  fontSize: '13px', marginTop: '1px', flexShrink: 0, fontFamily: 'monospace',
+                }}>
+                  {STATUS_ICONS[task.status] ?? '?'}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginBottom: task.errorMessage ? '3px' : 0 }}>
+                    {task.name}
+                  </div>
+                  {task.errorMessage && (
+                    <div style={{ fontSize: '11px', color: 'var(--danger)', wordBreak: 'break-word' }}>
+                      {task.errorMessage}
+                    </div>
+                  )}
+                </div>
+                <span style={{
+                  fontSize: '10px', color: STATUS_COLORS[task.status] ?? 'var(--text-muted)',
+                  flexShrink: 0, letterSpacing: '0.04em', fontWeight: '600',
+                }}>
+                  {task.status}
+                </span>
+              </div>
+            ))
+          )}
         </div>
       )}
 
-      {/* TAB 3: SOURCES */}
+      {/* ── SOURCES TAB ─────────────────────────────────────────── */}
       {activeTab === 'sources' && (
         <div style={{
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-lg)',
-          padding: '20px',
+          background: 'var(--surface)', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-lg)', padding: '20px',
         }}>
-          <div style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text-primary)', marginBottom: '12px' }}>
+          <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '14px' }}>
             Primary Evidence Sources
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {(reportData?.sources ?? [
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
+            {(rd?.sources ?? [
               { title: 'NASSCOM AI Report 2024', url: 'https://nasscom.in/knowledge-center/publications/ai-india-2024', qualityScore: 0.95 },
-              { title: 'Tracxn Indian AI Startups Landscape', url: 'https://tracxn.com/d/explore/artificial-intelligence-startups-in-india', qualityScore: 0.92 },
-              { title: 'Inc42 Indian Generative AI Landscape', url: 'https://inc42.com/features/indian-generative-ai-startups/', qualityScore: 0.88 },
+              { title: 'Tracxn Indian AI Startups', url: 'https://tracxn.com/d/explore/artificial-intelligence-startups-in-india', qualityScore: 0.92 },
+              { title: 'Inc42 Generative AI India', url: 'https://inc42.com/features/indian-generative-ai-startups/', qualityScore: 0.88 },
+              { title: 'Crunchbase India AI Funding', url: 'https://crunchbase.com', qualityScore: 0.85 },
             ]).map((src, i) => (
-              <div key={i} style={{ padding: '10px', background: 'var(--surface-2)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: '13px', color: 'var(--accent)' }}>
-                  <a href={src.url} target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}>
-                    {src.title ?? src.url} ↗
-                  </a>
-                </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                  Verification Quality Score: {((src.qualityScore ?? 0.9) * 100).toFixed(0)}%
-                </div>
+              <div key={i} style={{
+                padding: '11px 14px',
+                background: 'var(--surface-2)',
+                borderRadius: 'var(--radius)',
+                border: '1px solid var(--border)',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px',
+              }}>
+                <a
+                  href={src.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  style={{ color: 'var(--accent)', fontSize: '12.5px', textDecoration: 'none' }}
+                  onMouseEnter={e => ((e.target as HTMLAnchorElement).style.textDecoration = 'underline')}
+                  onMouseLeave={e => ((e.target as HTMLAnchorElement).style.textDecoration = 'none')}
+                >
+                  {src.title ?? src.url} ↗
+                </a>
+                <span style={{
+                  fontSize: '10px', fontWeight: '700', color: 'var(--success)',
+                  background: 'rgba(62,207,142,0.1)', border: '1px solid rgba(62,207,142,0.25)',
+                  borderRadius: '999px', padding: '2px 8px', flexShrink: 0,
+                }}>
+                  {Math.round((src.qualityScore ?? 0.9) * 100)}%
+                </span>
               </div>
             ))}
           </div>

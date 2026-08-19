@@ -17,6 +17,7 @@ export type KernelState = {
 export type ProcessCommandResult = {
   isConversation: boolean;
   directReply?: string;
+  spokenReply?: string;    // shorter TTS version of directReply
   suggestedQuestions?: string[];
   requiresUserInput?: boolean;
   ignoredAsThirdParty?: boolean;
@@ -62,6 +63,7 @@ export class PhantomKernel {
       return {
         isConversation: true,
         directReply: conv.reply,
+        spokenReply: conv.spokenReply,
         suggestedQuestions: conv.suggestedQuestions,
         requiresUserInput: conv.requiresUserInput,
         ignoredAsThirdParty: conv.ignoredAsThirdParty,

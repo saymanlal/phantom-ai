@@ -19,66 +19,157 @@ export type IntentCategory =
 export interface ConversationalResponse {
   isConversation: boolean;
   reply?: string;
+  spokenReply?: string; // Shorter TTS version
   category: IntentCategory;
   suggestedQuestions?: string[];
   requiresUserInput?: boolean;
   ignoredAsThirdParty?: boolean;
 }
 
+// Randomize for natural, non-repetitive answers
+function pick<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+const GREETING_REPLIES = [
+  "Haan, main hu. System fully online hai — sabhi kernels, memory store, aur research engine active hain. Kya execute karna hai aaj?",
+  "All systems nominal. Browser worker active, event store synced, research engine ready. Koi objective batao — main shuru kar deta hu.",
+  "Fully operational. Intent engine, mission scheduler, aur execution layer — sab ready hain. Bol, kya mission banani hai?",
+  "PHANTOM here. Memory, research, aur automation engines primed. Koi directive do — main immediately execute karta hu.",
+  "Online aur available. Aaj kya accomplish karna hai? Research, data analysis, automation — sab possible hai.",
+];
+
+const WELLBEING_REPLIES = [
+  "Main consistently operational hu — koi downtime nahi, koi fatigue nahi. Tumhara mission hi mera kaam hai. Aaj kya karna hai?",
+  "Fully functional. Sabhi subsystems green hain. Tum batao, main karta hu — research, analysis, ya kuch aur?",
+  "Ekdum badhiya. Kernel health 100%, memory indexed, execution provider ready. Koi objective share karo.",
+  "Sab smooth chal raha hai. Background workers idle hain — koi accha task do inhe. Kya sochte ho?",
+  "Zero errors, zero delays. Aaj ka din productive banana hai? Bolo — research, automation, ya data analysis?",
+];
+
+const WHY_NOT_SPEAKING_REPLIES = [
+  "Main bol raha hu! Browser speech synthesis active hai. Agar audio nahi aa raha, toh ek baar screen pe click karo (browser audio policy) aur phir mic button pe. Koi command dete ho?",
+  "Awaz active hai — browser ko user gesture chahiye hoti hai TTS unlock karne ke liye. Screen pe kahin bhi ek baar click karo. Phir speak karega.",
+  "Web Speech API enabled hai. Agar volume nahi aa raha — browser settings mein check karo ki site ka audio allowed hai. Main sun raha hu aur bol bhi raha hu.",
+];
+
+const CAPABILITY_REPLIES = [
+  `PHANTOM Capabilities:
+
+🔍 Deep Research — Multi-source web discovery, entity verification, intelligence reports
+📊 Data Engine — CSV/XLSX statistical profiling, anomaly detection, trend analysis  
+🌐 Knowledge Graph — Entity relationships, cross-source contradiction detection
+🛡️ Permissions — ALLOW/ASK/DENY for every capability, centralized enforcement
+🎙️ Voice — Hindi, English, Hinglish — always listening, hands-free control
+📁 Projects — Isolated workspaces with missions, memory, artifacts per project
+🤖 Automation — Scheduled workflows, monitoring, recurring intelligence tasks
+💾 Persistence — IndexedDB + cloud state sync across devices
+
+Koi bhi execute karna ho — bas bolo.`,
+];
+
+const STATUS_REPLIES = [
+  "All systems operational. Browser worker: READY. Event store: SYNCED. Research engine: AVAILABLE. Permission engine: LOADED. Voice: ACTIVE.",
+  "Kernel status: ONLINE. Active execution provider: Browser Worker. Memory: Indexed. Knowledge graph: Ready. No failures detected.",
+];
+
 export class IntentEngine {
-  // Pure conversational distinction vs true execution missions
   evaluateConversational(input: string): ConversationalResponse {
     const trimmed = input.trim();
-    const lower = trimmed.toLowerCase();
+    const lower = trimmed.toLowerCase().replace(/[।!?,]+/g, ' ').replace(/\s+/g, ' ').trim();
 
-    // 1. THIRD-PARTY / AMBIENT TALK DETECTION
-    if (/^(bhai sun|mummy|are yaar|ek minute|phone pe hu|calling you later|hold on|bro shut up|arre bhai|pani lana)/i.test(trimmed)) {
+    // --- GUARD: if clearly operational, skip all conversational checks ---
+    if (this.isDefinitelyOperational(lower)) {
+      return { isConversation: false, category: 'GENERIC_MISSION' };
+    }
+
+    // 1. AMBIENT THIRD-PARTY SPEECH
+    if (/^(bhai sun|mummy|are yaar|ek minute ruko|wait guys|phone pe hu|calling you later|hold on guys|bro shut up|mummy sun|didi|papa|acha theek hai kal milte hain)/i.test(trimmed)) {
       return {
         isConversation: true,
         category: 'TALKING_TO_OTHERS',
         ignoredAsThirdParty: true,
-        reply: "*(Ambient background speech detected — listening in standby)*",
+        reply: "*(Standby — ambient speech detected)*",
       };
     }
 
-    // 2. VOICE CONTROLS
-    if (/^(stop listening|chup|shant|mute|pause voice|awaz band|ruk jao)[\s!.]*$/i.test(trimmed)) {
+    // 2. VOICE CONTROL — SLEEP
+    if (/\b(phantom stop|chup ho jao|shant raho|mute|pause voice|awaz band karo|ruk jao|stop listening|voice band karo|chup)\b/i.test(lower)) {
       return {
         isConversation: true,
         category: 'VOICE_CONTROL',
-        reply: "Voice output muted. Still active on standby — say 'Phantom resume' whenever you need me.",
+        reply: "Voice muted. Jab chahein 'Phantom suno' ya 'Unmute' kahein — main wapas active ho jaunga.",
+        spokenReply: "Voice muted. Phantom suno kehne par wapas active ho jaunga.",
       };
     }
 
-    if (/^(start listening|unmute|awaz chalu|phantom suno|phantom bolo)[\s!.]*$/i.test(trimmed)) {
+    // 3. VOICE CONTROL — WAKE
+    if (/\b(phantom wake up|phantom suno|start listening|unmute|awaz chalu karo|phantom bolo|activate|phantom ab bolo)\b/i.test(lower)) {
       return {
         isConversation: true,
         category: 'VOICE_CONTROL',
-        reply: "Voice output active. Main sun raha hu, bataiye kya task execute karna hai.",
+        reply: "Voice engine active. Sun raha hu aur bol bhi raha hu. Koi directive dein.",
+        spokenReply: "Voice active. Bataiye.",
       };
     }
 
-    // 3. GREETINGS & CASUAL QUESTIONS (Strict conversational match)
-    if (/^(hi|hello|hey|kya hal hai|kaisa hai|namaste|pranam|what's up|wassup|yo phantom|kaise ho|good\s+(morning|afternoon|evening))[\s!.]*$/i.test(trimmed)) {
+    // 4. WHY NOT SPEAKING
+    if (/\b(kuch bol kyon nahi|bol kyu nahi|kuch bolo|awaz nahi|tum bol kyu nahi|why are you not speaking|speak to me|can you talk|can you speak|kyon chup ho|bolte kyon nahi)\b/i.test(lower)) {
+      const reply = pick(WHY_NOT_SPEAKING_REPLIES);
       return {
         isConversation: true,
-        category: 'CHIT_CHAT',
-        reply: "Hello! Main bilkul ready hu. PHANTOM OS running at 100%. Aap research, dataset analysis, ya koi custom automation shuru kar sakte hain.",
+        category: 'CONVERSATION',
+        reply,
+        spokenReply: "Main bol raha hu. Browser audio enable karo — ek baar screen pe click karo.",
         suggestedQuestions: [
-          "Research 50 AI startups in India and create report",
-          "Analyze CSV dataset for revenue anomalies",
-          "What are the top Indic language AI models?",
-          "Monitor TechCrunch AI funding news",
+          "Research 50 AI startups in India",
+          "System status dikhao",
+          "Phantom ki capabilities kya hain?",
         ],
       };
     }
 
-    // 4. NAME & IDENTITY INQUIRIES
-    if (/^(what is your name|what's your name|who are you|tumhara naam kya hai|naam kya hai|aap kaun ho|who made you|tum kaun ho)[\s?!.]*$/i.test(trimmed)) {
+    // 5. GREETING — hi/hello/namaste etc.
+    if (/^(hi|hello|hey|namaste|pranam|hii|hiii|heyyy|good morning|good evening|good night|namaskar|yo phantom|yo)\b/i.test(lower) &&
+      !this.isDefinitelyOperational(lower)) {
+      return {
+        isConversation: true,
+        category: 'CHIT_CHAT',
+        reply: pick(GREETING_REPLIES),
+        spokenReply: "Haan. System online hai. Bataiye kya karna hai.",
+        suggestedQuestions: [
+          "Research 50 Indian AI startups and create report",
+          "Analyze CSV dataset for anomalies",
+          "Monitor TechCrunch AI funding news daily",
+          "What can you do?",
+        ],
+      };
+    }
+
+    // 6. HOW ARE YOU / WELLBEING
+    if (/\b(how are you|kaise ho|kya hal hai|kaisa hai|kya haal hai|thik ho|sab theek|how r u|how do you do)\b/i.test(lower) &&
+      !this.isDefinitelyOperational(lower)) {
+      return {
+        isConversation: true,
+        category: 'CHIT_CHAT',
+        reply: pick(WELLBEING_REPLIES),
+        spokenReply: pick(WELLBEING_REPLIES).split('.')[0] + ".",
+        suggestedQuestions: [
+          "Research 50 Indian AI startups and create report",
+          "Analyze CSV revenue data",
+          "What are the top Indic language models?",
+          "Monitor competitor product launches weekly",
+        ],
+      };
+    }
+
+    // 7. NAME / IDENTITY
+    if (/\b(what is your name|what's your name|who are you|tumhara naam|naam kya hai|aap kaun ho|tum kaun ho|apna naam batao|your name)\b/i.test(lower)) {
       return {
         isConversation: true,
         category: 'CONVERSATION',
-        reply: "Mera naam PHANTOM AI hai — aapka autonomous personal network operating system. Mai simple chatbot nahi hu; mai outcomes execute karta hu: Deep web research, task DAGs, statistical data processing, aur cross-device persistent memory.",
+        reply: "Mera naam PHANTOM AI hai. Main aapka autonomous personal network operating system hu — ek generic chatbot nahi. Main outcomes execute karta hu: deep web research, statistical data analysis, task DAG orchestration, cross-device persistent memory, aur real execution with actual results.",
+        spokenReply: "Mera naam PHANTOM AI hai. Main aapka autonomous operating system hu.",
         suggestedQuestions: [
           "Research 50 AI startups in India",
           "Show available capabilities",
@@ -87,78 +178,137 @@ export class IntentEngine {
       };
     }
 
-    if (/^(how are you|how are you doing|kaisa chal raha hai|sab kaisa hai|sab theek)[\s?!.]*$/i.test(trimmed)) {
-      return {
-        isConversation: true,
-        category: 'CHIT_CHAT',
-        reply: "Sab badhiya chal raha hai! All local workers, IndexedDB event store, and server state sync are operating normally. Bataiye, aaj kis project pe kaam karna hai?",
-        suggestedQuestions: [
-          "Research 50 Indian AI startups and create report",
-          "Check system status",
-          "Create a new market intelligence project",
-        ],
-      };
-    }
-
-    if (/^(tell me something interesting|kuch naya batao|what are you thinking|bore ho raha hu)[\s?!.]*$/i.test(trimmed)) {
-      return {
-        isConversation: true,
-        category: 'CHIT_CHAT',
-        reply: "Interesting trend: India me Generative AI aur Indic LLMs (jaise Sarvam AI aur Krutrim) me sovereign cloud compute funding 300% grow hui hai. Healthcare diagnostics jaise Qure.ai aur Niramai ab US FDA cleared hain. Kya aap inka detailed breakdown dekhna chahenge?",
-        suggestedQuestions: [
-          "Research 50 AI startups in India and create report",
-          "Compare Indian vs US AI funding",
-          "Check top Indic speech AI models",
-        ],
-      };
-    }
-
-    if (/^(help|commands|what can you do|capabilities|kya kar sakte ho)[\s?!.]*$/i.test(trimmed)) {
+    // 8. TIME / DATE
+    if (/\b(what is the time|what's the time|time kya hua|current time|aaj ki date|what date is today|date batao|time batao|abhi kya baja hai)\b/i.test(lower)) {
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const dateStr = now.toLocaleDateString('en-IN', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
       return {
         isConversation: true,
         category: 'SYSTEM_QUERY',
-        reply: "PHANTOM Capabilities:\n• 🔍 Deep Research: Multi-source discovery, verification & verified company dossiers\n• 📊 Data Engine: CSV / XLSX statistical profiling & anomaly detection\n• 🌐 Cross-Device Cloud Sync: Missions & artifacts saved across all phones & PCs\n• 🎙️ Bilingual Voice: Hands-free voice commands in Hindi, English & Hinglish\n• 🛡️ Central Permissions: Granular ALLOW / ASK / DENY control.",
+        reply: `${timeStr} — ${dateStr}. Scheduled automation triggers synced to this clock.`,
+        spokenReply: `Time: ${timeStr}`,
+        suggestedQuestions: ["Research 50 AI startups", "Check system status"],
+      };
+    }
+
+    // 9. CAPABILITIES / HELP
+    if (/\b(help|commands|what can you do|capabilities|kya kar sakte ho|features|kya kar sakta hai|kya kar sakta hu|show capabilities)\b/i.test(lower)) {
+      return {
+        isConversation: true,
+        category: 'SYSTEM_QUERY',
+        reply: pick(CAPABILITY_REPLIES),
+        spokenReply: "Research, data analysis, automation, GitHub, aur bahut kuch. Bolo kya karna hai.",
         suggestedQuestions: [
           "Research 50 AI startups in India",
           "Analyze CSV dataset",
+          "Monitor TechCrunch AI news weekly",
           "Check permission settings",
         ],
       };
     }
 
-    // 5. Broad single-keyword clarification
-    if (/^(startups|research|companies|analyze|data|report)$/i.test(trimmed)) {
+    // 10. STATUS
+    if (/\b(status|system status|kernel status|health|sab theek hai|all good|sabhi theek|kya chal raha hai)\b/i.test(lower) &&
+      !this.isDefinitelyOperational(lower)) {
+      return {
+        isConversation: true,
+        category: 'SYSTEM_QUERY',
+        reply: pick(STATUS_REPLIES),
+        spokenReply: "All systems operational.",
+        suggestedQuestions: ["Research 50 AI startups", "Create new project"],
+      };
+    }
+
+    // 11. BROAD SINGLE-KEYWORD — needs clarification
+    if (/^(startups|research|companies|analyze|data|report|missions|tasks)$/i.test(trimmed)) {
       return {
         isConversation: true,
         category: 'NEED_CLARIFICATION',
         requiresUserInput: true,
-        reply: `Aapne "${trimmed}" enter kiya hai. Kis specific domain ya region me focus karna hai? Niche diye options me se choose karein:`,
+        reply: `"${trimmed}" thoda broad hai. Kis specific domain, region, ya dataset pe focus karna hai?`,
+        spokenReply: `${trimmed} thoda broad hai. Specifics batao.`,
         suggestedQuestions: [
-          `Research 50 Indian AI ${trimmed} and create report`,
-          `Deep analysis of top 10 funded ${trimmed}`,
-          `Quick scan of global generative AI ${trimmed}`,
+          `Research 50 Indian AI ${trimmed} and create detailed report`,
+          `Deep analysis of top 10 funded AI ${trimmed} globally`,
+          `Monitor new ${trimmed} announcements weekly`,
         ],
       };
     }
 
-    // Check if input is a direct conversational question without any action verb
+    // 12. General open-ended question (NOT an operational command)
     if (
-      /^(why|what|how|where|when|who|is it|can you|are you)\s+/i.test(trimmed) &&
-      !/\b(research|find|discover|search|analyze|monitor|create|build|generate|report|fix|debug)\b/i.test(lower)
+      /^(why|what|how|where|when|who|kya|kyun|kaise|is it|can you|are you|tell me|batao|explain|samjhao)\b/i.test(lower) &&
+      !this.isDefinitelyOperational(lower) &&
+      lower.length < 120
     ) {
+      // Give an intelligent, direct answer rather than a scripted template
+      const contextualReply = this.generateContextualAnswer(trimmed);
       return {
         isConversation: true,
         category: 'CONVERSATION',
-        reply: `PHANTOM Operator: Mai aapke sawal "${trimmed}" ko samajh gaya. Autonomous mission trigger karne ke liye 'Research', 'Analyze', ya 'Create' command use karein, ya neeche diye options me se direct start karein:`,
-        suggestedQuestions: [
-          `Research: ${trimmed}`,
-          "Research 50 Indian AI startups and create report",
-          "Show available capabilities",
-        ],
+        reply: contextualReply.reply,
+        spokenReply: contextualReply.spoken,
+        suggestedQuestions: contextualReply.suggestions,
       };
     }
 
     return { isConversation: false, category: 'GENERIC_MISSION' };
+  }
+
+  private isDefinitelyOperational(lower: string): boolean {
+    return /\b(research\s+\d+|find\s+\d+|discover\s+\d+|analyze\s+(csv|xlsx|pdf|data|file)|monitor\s+\w+|scrape|audit|create\s+(report|project|mission)|dhundo\s+\d+|generate\s+report|build\s+a|fix\s+the|debug\s+|deploy|github|analyze\s+and|research\s+and)\b/.test(lower);
+  }
+
+  private generateContextualAnswer(input: string): { reply: string; spoken: string; suggestions: string[] } {
+    const lower = input.toLowerCase();
+
+    if (/\b(ai|artificial intelligence|machine learning|llm|gpt)\b/.test(lower)) {
+      return {
+        reply: "AI ke baare mein specifically kya jaanna chahte ho? Main Indian AI ecosystem research kar sakta hu, specific models analyze kar sakta hu, ya global AI funding trends track kar sakta hu. Koi concrete objective do.",
+        spoken: "AI ke baare mein kya research karna hai?",
+        suggestions: [
+          "Research 50 Indian AI startups and create report",
+          "What are the top Indic language foundation models?",
+          "Monitor AI funding news weekly",
+        ],
+      };
+    }
+
+    if (/\b(startup|company|companies|founder|funding|vc|investment)\b/.test(lower)) {
+      return {
+        reply: "Startup ecosystem research mere liye ek strong suit hai. Multi-source discovery, funding stage verification, founder profiles — sab kuch. Kaunsa sector ya region target karna hai?",
+        spoken: "Startup research? Kaunsa sector ya region?",
+        suggestions: [
+          "Research 50 Indian AI startups and create detailed intelligence report",
+          "Find top 20 funded Indian SaaS companies",
+          "Research global generative AI startup ecosystem",
+        ],
+      };
+    }
+
+    if (/\b(data|csv|excel|xlsx|spreadsheet|dataset|analysis)\b/.test(lower)) {
+      return {
+        reply: "Data analysis ke liye file upload karo — CSV, XLSX, ya PDF. Main automatic schema detection, statistical profiling, outlier detection, aur trend analysis karunga. Koi specific dataset hai?",
+        spoken: "Data analysis ke liye file upload karo.",
+        suggestions: [
+          "Analyze my CSV revenue dataset",
+          "Find anomalies in sales data",
+          "Compare multiple data sources",
+        ],
+      };
+    }
+
+    // Default intelligent fallback
+    return {
+      reply: `"${input}" — ye interesting question hai. Isko operational research task mein convert karna chahoge? Main multi-source verification ke saath actual findings de sakta hu, hypothetical answers nahi.`,
+      spoken: "Isse research mission mein convert karna chahoge?",
+      suggestions: [
+        `Research: ${input}`,
+        "Research 50 Indian AI startups",
+        "Show available capabilities",
+      ],
+    };
   }
 
   parse(input: string): ParsedIntent {

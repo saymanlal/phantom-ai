@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 interface SpeechRecognitionEvent extends Event {
   results: SpeechRecognitionResultList;
+  resultIndex: number;
 }
 
 interface SpeechRecognitionErrorEvent extends Event {
@@ -19,6 +20,7 @@ interface SpeechRecognitionInstance extends EventTarget {
   onresult: ((event: SpeechRecognitionEvent) => void) | null;
   onerror: ((event: SpeechRecognitionErrorEvent) => void) | null;
   onend: (() => void) | null;
+  onstart: (() => void) | null;
 }
 
 declare global {
@@ -28,186 +30,296 @@ declare global {
   }
 }
 
-export function useVoiceInterface(onCommandDetected?: (command: string) => void) {
-  const [isListening, setIsListening] = useState(true); // Default always-on
+export type VoiceLanguage = 'hi-IN' | 'en-IN' | 'en-US';
+
+export interface VoiceState {
+  isListening: boolean;
+  isSpeaking: boolean;
+  isMuted: boolean;
+  supported: boolean;
+  transcript: string;    // live interim transcript
+  audioLevel: number;    // 0–100
+  language: VoiceLanguage;
+  setLanguage: (lang: VoiceLanguage) => void;
+  toggleListening: () => void;
+  speak: (text: string, priority?: boolean) => void;
+  stopSpeaking: () => void;
+}
+
+export function useVoiceInterface(
+  onCommandDetected?: (command: string) => void,
+): VoiceState {
+  const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [supported, setSupported] = useState(false);
-  const [language, setLanguage] = useState<'hi-IN' | 'en-IN' | 'en-US'>('en-IN');
+  const [language, setLanguage] = useState<VoiceLanguage>('en-IN');
   const [audioLevel, setAudioLevel] = useState(0);
 
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const isMutedRef = useRef(false);
   const onCommandRef = useRef(onCommandDetected);
-  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const lastSpokenTextRef = useRef('');
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shouldBeRunningRef = useRef(true); // tracks intent to listen
+  const languageRef = useRef(language);
+  const lastFinalTextRef = useRef(''); // prevent duplicate command dispatch
+  const isStartingRef = useRef(false);
 
-  useEffect(() => {
-    onCommandRef.current = onCommandDetected;
-  }, [onCommandDetected]);
+  useEffect(() => { onCommandRef.current = onCommandDetected; }, [onCommandDetected]);
+  useEffect(() => { languageRef.current = language; }, [language]);
 
-  useEffect(() => {
-    isMutedRef.current = isMuted;
-  }, [isMuted]);
-
-  // Self-healing continuous listener
-  const startRecognitionEngine = useCallback(() => {
+  // ─── TTS ──────────────────────────────────────────────────────────────────
+  const stopSpeaking = useCallback(() => {
     if (typeof window === 'undefined') return;
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
+    try { window.speechSynthesis?.cancel(); } catch {}
+    setIsSpeaking(false);
+  }, []);
+
+  const speak = useCallback((text: string, priority = false) => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    if (isMutedRef.current && !priority) return;
+
+    try { window.speechSynthesis.cancel(); } catch {}
+    try { window.speechSynthesis.resume(); } catch {}
+
+    const cleanText = text
+      .replace(/[*#•—_`>]/g, ' ')
+      .replace(/→/g, '')
+      .replace(/\n+/g, '. ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 280); // keep TTS short & natural
+
+    if (!cleanText) return;
+
+    setIsSpeaking(true);
+
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.rate = 1.05;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+
+    // Voice selection
+    const doSpeak = () => {
+      const voices = window.speechSynthesis.getVoices();
+      const hindiVoice = voices.find(v =>
+        v.lang.startsWith('hi') || v.name.toLowerCase().includes('hindi')
+      );
+      const indiaVoice = voices.find(v =>
+        v.lang === 'en-IN' || v.name.toLowerCase().includes('india') || v.name.toLowerCase().includes('ravi') || v.name.toLowerCase().includes('heera')
+      );
+      const gbVoice = voices.find(v => v.lang === 'en-GB');
+      const anyEnglish = voices.find(v => v.lang.startsWith('en'));
+
+      const hasDevanagari = /[\u0900-\u097F]/.test(cleanText);
+      if (hasDevanagari && hindiVoice) utterance.voice = hindiVoice;
+      else if (indiaVoice) utterance.voice = indiaVoice;
+      else if (gbVoice) utterance.voice = gbVoice;
+      else if (anyEnglish) utterance.voice = anyEnglish;
+
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+      window.speechSynthesis.speak(utterance);
+    };
+
+    // Voices may not be loaded yet
+    if (window.speechSynthesis.getVoices().length > 0) {
+      doSpeak();
+    } else {
+      window.speechSynthesis.onvoiceschanged = () => {
+        window.speechSynthesis.onvoiceschanged = null;
+        doSpeak();
+      };
+    }
+  }, []);
+
+  // ─── RECOGNITION ENGINE ───────────────────────────────────────────────────
+  const startRecognition = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    if (isStartingRef.current) return;
+    if (!shouldBeRunningRef.current) return;
+    if (isMutedRef.current) return;
+
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+
+    isStartingRef.current = true;
 
     try {
       if (recognitionRef.current) {
         try { recognitionRef.current.abort(); } catch {}
+        recognitionRef.current = null;
       }
 
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = language;
+      const rec = new SR();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = languageRef.current;
 
-      recognition.onresult = (event: SpeechRecognitionEvent) => {
-        let interim = '';
-        let final = '';
+      rec.onstart = () => {
+        setIsListening(true);
+        setSupported(true);
+        isStartingRef.current = false;
+      };
 
-        for (let i = 0; i < event.results.length; i++) {
-          const res = event.results[i];
-          if (res && res[0]) {
-            if (res.isFinal) {
-              final += res[0].transcript + ' ';
-            } else {
-              interim += res[0].transcript;
-            }
+      rec.onresult = (event: SpeechRecognitionEvent) => {
+        if (isMutedRef.current) return;
+
+        let interimText = '';
+        let finalText = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const r = event.results[i];
+          if (!r[0]) continue;
+          const t = r[0].transcript.trim();
+          if (r.isFinal) {
+            finalText += (finalText ? ' ' : '') + t;
+          } else {
+            interimText += (interimText ? ' ' : '') + t;
           }
         }
 
-        const heardText = (final || interim).trim();
-        if (heardText) {
-          setTranscript(heardText);
-          setAudioLevel(Math.min(100, heardText.length * 6));
+        // Show live interim
+        if (interimText) {
+          setTranscript(interimText);
+          setAudioLevel(Math.min(100, interimText.length * 6));
+        }
 
-          // 1. VOICE WAKE-WORDS & VOICE SHUTDOWN DETECTOR
-          if (/\b(phantom stop|chup ho jao|mute ho jao|stop listening|shant raho|mute voice|awaz band)\b/i.test(heardText)) {
-            setIsMuted(true);
+        if (finalText) {
+          setTranscript('');
+          setAudioLevel(0);
+
+          // Prevent duplicate dispatch (same final text within 1s)
+          if (finalText === lastFinalTextRef.current) return;
+          lastFinalTextRef.current = finalText;
+          setTimeout(() => { lastFinalTextRef.current = ''; }, 1200);
+
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+
+          // Interrupt TTS if new command comes in
+          if (window.speechSynthesis?.speaking) {
+            stopSpeaking();
+          }
+
+          // Voice control commands handled here (before forwarding)
+          const lf = finalText.toLowerCase();
+          if (/\b(phantom stop|chup ho jao|mute|stop listening|voice band|awaz band)\b/i.test(lf)) {
             isMutedRef.current = true;
-            window.speechSynthesis?.cancel();
-            speak("Voice muted. Say 'Phantom wake up' or 'Phantom suno' anytime to activate me.");
+            setIsMuted(true);
+            shouldBeRunningRef.current = false;
+            try { rec.abort(); } catch {}
+            setIsListening(false);
             setTranscript('');
+            speak("Voice muted.", true);
             return;
           }
-
-          if (/\b(phantom wake up|phantom suno|start listening|unmute|phantom bolo|activate)\b/i.test(heardText)) {
-            setIsMuted(false);
+          if (/\b(phantom wake up|phantom suno|unmute|start listening|awaz chalu|phantom bolo)\b/i.test(lf)) {
             isMutedRef.current = false;
-            speak("Voice engine fully active. Main sun raha hu.");
-            setTranscript('');
+            setIsMuted(false);
+            shouldBeRunningRef.current = true;
+            speak("Voice active.", true);
+            // Will auto-restart via onend
             return;
           }
 
-          // If currently muted, ignore everything else
-          if (isMutedRef.current) return;
+          // Ambient speech filter
+          if (/^(bhai sun|mummy|are yaar|ek minute ruko|wait guys|phone pe hu|hold on)/i.test(finalText)) return;
 
-          // 2. AMBIENT BACKGROUND SPEECH FILTER
-          if (/^(bhai sun|mummy|are yaar|ek minute ruko|wait guys|phone pe hu|calling you later|hold on|bro shut up)/i.test(heardText)) {
-            return; // Ignore ambient noise
-          }
-
-          // Debounced speech dispatch: Wait 900ms after user pauses speaking
+          onCommandRef.current?.(finalText);
+        } else if (interimText) {
+          // Debounce interim to catch natural pauses
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = setTimeout(() => {
-            if (heardText && heardText !== lastSpokenTextRef.current && !isMutedRef.current) {
-              lastSpokenTextRef.current = heardText;
-              setTranscript('');
-              setAudioLevel(0);
-
-              // Cancel active TTS output for in-between interruption
-              if (window.speechSynthesis?.speaking) {
-                window.speechSynthesis.cancel();
-                setIsSpeaking(false);
-              }
-
-              onCommandRef.current?.(heardText);
-            }
-          }, 900);
+            const t = interimText.trim();
+            if (!t || isMutedRef.current) return;
+            if (t === lastFinalTextRef.current) return;
+            lastFinalTextRef.current = t;
+            setTimeout(() => { lastFinalTextRef.current = ''; }, 1200);
+            setTranscript('');
+            setAudioLevel(0);
+            if (window.speechSynthesis?.speaking) stopSpeaking();
+            onCommandRef.current?.(t);
+          }, 1100);
         }
       };
 
-      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-        if (event.error !== 'aborted' && !isMutedRef.current) {
-          setTimeout(() => {
-            try { recognition.start(); } catch {}
-          }, 300);
+      rec.onerror = (event: SpeechRecognitionErrorEvent) => {
+        isStartingRef.current = false;
+        if (event.error === 'aborted' || event.error === 'not-allowed') return;
+        // Auto-restart on transient errors
+        if (shouldBeRunningRef.current && !isMutedRef.current) {
+          restartTimerRef.current = setTimeout(() => startRecognition(), 400);
         }
       };
 
-      recognition.onend = () => {
-        // ALWAYS RESTART automatically for continuous non-glitchy listening
-        if (!isMutedRef.current) {
-          setTimeout(() => {
-            try { recognition.start(); } catch {}
-          }, 200);
+      rec.onend = () => {
+        isStartingRef.current = false;
+        setIsListening(false);
+        // Self-healing restart loop
+        if (shouldBeRunningRef.current && !isMutedRef.current) {
+          restartTimerRef.current = setTimeout(() => startRecognition(), 250);
         }
       };
 
-      recognition.start();
-      recognitionRef.current = recognition;
-      setIsListening(true);
-      setSupported(true);
-    } catch {}
-  }, [language]);
-
-  useEffect(() => {
-    startRecognitionEngine();
-    return () => {
-      if (recognitionRef.current) {
-        try { recognitionRef.current.abort(); } catch {}
-      }
-    };
-  }, [startRecognitionEngine]);
-
-  const speak = useCallback((text: string) => {
-    if (isMutedRef.current || typeof window === 'undefined' || !window.speechSynthesis) return;
-
-    window.speechSynthesis.cancel();
-    setIsSpeaking(true);
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.02;
-    utterance.pitch = 1.0;
-
-    const voices = window.speechSynthesis.getVoices();
-    const hindiVoice = voices.find(v => v.lang.includes('hi') || v.name.toLowerCase().includes('india') || v.name.toLowerCase().includes('hindi'));
-    const englishVoice = voices.find(v => v.lang.includes('en-IN') || v.lang.includes('en-GB') || v.lang.includes('en-US'));
-
-    if (/[\u0900-\u097F]/.test(text) && hindiVoice) {
-      utterance.voice = hindiVoice;
-    } else if (englishVoice) {
-      utterance.voice = englishVoice;
+      rec.start();
+      recognitionRef.current = rec;
+    } catch {
+      isStartingRef.current = false;
     }
+  }, [speak, stopSpeaking]);
 
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = () => setIsSpeaking(false);
+  // Initial boot
+  useEffect(() => {
+    const SR = typeof window !== 'undefined' &&
+      (window.SpeechRecognition || window.webkitSpeechRecognition);
+    if (!SR) { setSupported(false); return; }
+    setSupported(true);
+    shouldBeRunningRef.current = true;
+    startRecognition();
 
-    window.speechSynthesis.speak(utterance);
+    return () => {
+      shouldBeRunningRef.current = false;
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      try { recognitionRef.current?.abort(); } catch {}
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const toggleListening = () => {
-    if (isMuted) {
-      setIsMuted(false);
+  // Restart when language changes
+  useEffect(() => {
+    if (!supported) return;
+    try { recognitionRef.current?.abort(); } catch {}
+    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+    restartTimerRef.current = setTimeout(() => startRecognition(), 300);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [language]);
+
+  const toggleListening = useCallback(() => {
+    if (isMutedRef.current) {
+      // UNMUTE
       isMutedRef.current = false;
-      startRecognitionEngine();
-      speak("Voice unmuted. I am listening.");
+      setIsMuted(false);
+      shouldBeRunningRef.current = true;
+      startRecognition();
+      speak("Voice unmuted. Sun raha hu.", true);
     } else {
-      setIsMuted(true);
+      // MUTE
       isMutedRef.current = true;
-      window.speechSynthesis?.cancel();
-      setIsSpeaking(false);
+      setIsMuted(true);
+      shouldBeRunningRef.current = false;
+      stopSpeaking();
+      try { recognitionRef.current?.abort(); } catch {}
+      setIsListening(false);
+      setTranscript('');
+      setAudioLevel(0);
     }
-  };
+  }, [startRecognition, speak, stopSpeaking]);
 
   return {
-    isListening: !isMuted,
+    isListening: isListening && !isMuted,
     isSpeaking,
     isMuted,
     supported,
@@ -217,5 +329,6 @@ export function useVoiceInterface(onCommandDetected?: (command: string) => void)
     setLanguage,
     toggleListening,
     speak,
+    stopSpeaking,
   };
 }
